@@ -18,9 +18,10 @@ class EmailAccountService:
     """Service for managing email account connections."""
     
     # Gmail API scopes for email access
+    # gmail.readonly: Full read access including search queries
+    # gmail.metadata: Metadata only (doesn't support query parameter)
     GMAIL_SCOPES = [
         "https://www.googleapis.com/auth/gmail.readonly",
-        "https://www.googleapis.com/auth/gmail.metadata",
     ]
     
     def __init__(self):
@@ -45,20 +46,21 @@ class EmailAccountService:
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "redirect_uris": [
-                        f"{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
+                        f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
                     ],
                 }
             },
             scopes=self.GMAIL_SCOPES,
         )
         flow.redirect_uri = (
-            f"{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
+            f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
         )
         
         # Store user_id in state for callback
+        # include_granted_scopes="false" to avoid scope mismatch errors
         authorization_url, _ = flow.authorization_url(
             access_type="offline",
-            include_granted_scopes="true",
+            include_granted_scopes="false",  # Only request Gmail scopes, not previous userinfo scopes
             prompt="consent",
             state=str(user_id),  # Pass user_id through state
         )
@@ -93,19 +95,31 @@ class EmailAccountService:
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "redirect_uris": [
-                        f"{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
+                        f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
                     ],
                 }
             },
             scopes=self.GMAIL_SCOPES,
         )
         flow.redirect_uri = (
-            f"{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
+            f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/email-accounts/gmail/callback"
         )
         
         # Exchange code for tokens
         flow.fetch_token(code=code)
         credentials = flow.credentials
+        
+        # Verify that we have the required Gmail scopes
+        granted_scopes = credentials.scopes if credentials.scopes else []
+        required_scopes = set(self.GMAIL_SCOPES)
+        granted_scopes_set = set(granted_scopes)
+        
+        if not required_scopes.issubset(granted_scopes_set):
+            missing_scopes = required_scopes - granted_scopes_set
+            raise ValueError(
+                f"Missing required Gmail scopes: {missing_scopes}. "
+                f"Granted scopes: {granted_scopes}"
+            )
         
         # Get Gmail account info
         service = build("gmail", "v1", credentials=credentials)
