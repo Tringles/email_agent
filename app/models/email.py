@@ -1,0 +1,2 @@
+# Pydantic 모델
+
