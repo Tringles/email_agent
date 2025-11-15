@@ -70,11 +70,15 @@ class EmailRepository:
         """
         # Start with base query - join with EmailAccount to filter by user_id
         # Use joinedload to eager load email_account relationship
+        # Exclude deleted emails by default
         query = self.db.query(Email).options(
             joinedload(Email.email_account)
         ).join(
             EmailAccount, Email.email_account_id == EmailAccount.id
-        ).filter(EmailAccount.user_id == user_id)
+        ).filter(
+            EmailAccount.user_id == user_id,
+            Email.is_deleted == False  # Exclude deleted emails
+        )
 
         # Filter by account_id if provided
         if account_id:
@@ -130,9 +134,13 @@ class EmailRepository:
             Email object or None
         """
         # Use joinedload to eager load email_account relationship
+        # Exclude deleted emails
         query = self.db.query(Email).options(
             joinedload(Email.email_account)
-        ).filter(Email.id == email_id)
+        ).filter(
+            Email.id == email_id,
+            Email.is_deleted == False  # Exclude deleted emails
+        )
 
         # If user_id provided, verify ownership
         if user_id:
