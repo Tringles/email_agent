@@ -6,7 +6,6 @@ import base64
 from loguru import logger
 from datetime import datetime
 from typing import List, Optional
-from dateutil.parser import parse
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.oauth2.credentials import Credentials
@@ -317,6 +316,68 @@ class GmailProvider(EmailProvider):
         except:
             return None
 
+    async def download_attachment(
+        self, message_id: str, attachment_id: str
+    ) -> Optional[bytes]:
+        """
+        Download attachment data from Gmail.
+        
+        Args:
+            message_id: Gmail message ID
+            attachment_id: Gmail attachment ID
+            
+        Returns:
+            Attachment data as bytes, or None if error
+        """
+        if not self.service:
+            await self.connect()
+        
+        try:
+            attachment = (
+                self.service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=message_id, id=attachment_id)
+                .execute()
+            )
+            
+            # Decode base64 attachment data
+            attachment_data = base64.urlsafe_b64decode(
+                attachment.get("data", "")
+            )
+            return attachment_data
+        except Exception as e:
+            logger.error(f"Failed to download Gmail attachment {attachment_id}: {e}")
+            return None
+    
     def get_provider_name(self) -> str:
         """Return provider name."""
         return "gmail"
+    
+    async def delete_email(self, message_id: str) -> bool:
+        """
+        Delete an email from Gmail.
+        
+        Args:
+            message_id: Gmail message ID
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        if not self.service:
+            connected = await self.connect()
+            if not connected:
+                logger.error("Failed to connect to Gmail API for deletion")
+                return False
+        
+        try:
+            # Delete message using Gmail API
+            self.service.users().messages().delete(userId="me", id=message_id).execute()
+            logger.debug(f"Deleted Gmail message {message_id}")
+            return True
+        except HttpError as error:
+            logger.error(f"Gmail API error deleting message {message_id}: {error}")
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting Gmail message {message_id}: {e}")
+            return False
