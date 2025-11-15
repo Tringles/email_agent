@@ -171,7 +171,7 @@ class NaverProvider(EmailProvider):
                         filename = self._decode_header(filename)
                         filename = decode_encoded_words(filename)
 
-                        # Get attachment data size
+                        # Get attachment data
                         payload = part.get_payload(decode=True)
                         size = len(payload) if payload else 0
 
@@ -179,6 +179,7 @@ class NaverProvider(EmailProvider):
                             "filename": filename,
                             "mime_type": content_type,
                             "size": size,
+                            "data": payload,  # Store attachment data for MinIO storage
                         })
                     continue
 
@@ -216,3 +217,45 @@ class NaverProvider(EmailProvider):
     def get_provider_name(self) -> str:
         """Return provider name."""
         return "naver"
+    
+    async def delete_email(self, message_id: str) -> bool:
+        """
+        Delete an email from Naver IMAP.
+        
+        Args:
+            message_id: IMAP message ID (UID)
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        if not self.imap:
+            connected = await self.connect()
+            if not connected:
+                logger.error("Failed to connect to Naver IMAP for deletion")
+                return False
+        
+        try:
+            # Select INBOX
+            self.imap.select("INBOX")
+            
+            # Mark message as deleted using STORE command
+            # Format: STORE <message_id> +FLAGS (\Deleted)
+            status, _ = self.imap.store(message_id, '+FLAGS', '\\Deleted')
+            
+            if status != "OK":
+                logger.error(f"Failed to mark Naver message {message_id} as deleted")
+                return False
+            
+            # Expunge to permanently delete
+            status, _ = self.imap.expunge()
+            
+            if status == "OK":
+                logger.debug(f"Deleted Naver message {message_id}")
+                return True
+            else:
+                logger.warning(f"Naver message {message_id} marked as deleted but expunge failed")
+                return True  # Still consider it successful as message is marked for deletion
+                
+        except Exception as e:
+            logger.error(f"Error deleting Naver message {message_id}: {e}")
+            return False

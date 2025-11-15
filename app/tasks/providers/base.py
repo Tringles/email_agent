@@ -82,4 +82,17 @@ class EmailProvider(ABC):
     def get_provider_name(self) -> str:
         """Return the name of the provider (e.g., 'gmail', 'naver')."""
         pass
+    
+    @abstractmethod
+    async def delete_email(self, message_id: str) -> bool:
+        """
+        Delete an email from the provider.
+        
+        Args:
+            message_id: Provider-specific message ID
+            
+        Returns:
+            True if deleted successfully, False otherwise
+        """
+        pass
 
