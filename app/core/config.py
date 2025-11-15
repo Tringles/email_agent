@@ -41,13 +41,14 @@ class Settings(BaseSettings):
     VECTOR_DB_URL: Optional[str] = None
     VECTOR_DB_API_KEY: Optional[str] = None
 
-    # Storage
+    # Storage - MinIO/S3
     AWS_S3_BUCKET: Optional[str] = None
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
-    MINIO_ENDPOINT: Optional[str] = None
+    MINIO_ENDPOINT: Optional[str] = None  # e.g., http://localhost:9000
     MINIO_ACCESS_KEY: Optional[str] = None
     MINIO_SECRET_KEY: Optional[str] = None
+    MINIO_USE_SSL: bool = False  # Set to True if MinIO uses HTTPS
 
     # LLM
     OPENAI_API_KEY: Optional[str] = None
