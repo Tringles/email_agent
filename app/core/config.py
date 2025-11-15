@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Email AI Aggregator"
     API_BASE_URL: str = "http://localhost:8000"  # Base URL for OAuth redirects
+    FRONTEND_URL: str = "http://localhost:3000"  # Frontend URL for OAuth redirects
 
     # JWT
     JWT_SECRET_KEY: Optional[str] = None  # Set in .env
