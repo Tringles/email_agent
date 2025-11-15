@@ -478,6 +478,7 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [Celery Beat 설정](docs/celery_beat_setup.md)
 - [이메일 가져오기 테스트](docs/test_email_fetch.md)
 - [이메일 처리 워크플로우](docs/email_processing_workflow.md)
+- [프론트엔드 Wireframes](docs/frontend_wireframes.md)
 - [보안 감사 보고서](docs/security_audit.md)
 - [데이터베이스 관계 설명](docs/database_relationships.md)
 - [OAuth 플로우 설명](docs/oauth_flow.md)
