@@ -1,15 +1,13 @@
 """Email account service for connecting email accounts."""
 
 from loguru import logger
-from typing import Optional
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
 
 from app.models.user import User
 from app.core.config import settings
+from app.tasks.providers.naver import NaverProvider
 from app.models.email_account import EmailAccount, EmailProviderType
 
 
@@ -173,4 +171,100 @@ class EmailAccountService:
 
         logger.info(
             f"Connected Gmail account: {email_address} for user {user_id}")
+        return email_account
+
+    async def connect_naver_account(
+        self, user_id: int, email: str, password: str, db: Session
+    ) -> EmailAccount:
+        """
+        Connect Naver email account using IMAP credentials.
+
+        Args:
+            user_id: User ID to associate the account with
+            email: Naver email address
+            password: Naver email password (or app password)
+            db: Database session
+
+        Returns:
+            Created EmailAccount
+        """
+        # Verify user exists
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise ValueError(f"User {user_id} not found")
+
+        # Validate email format (basic check)
+        # Naver domain is naver.com
+        if "@naver.com" not in email.lower():
+            raise ValueError("Invalid Naver email address. Must be @naver.com")
+
+        # Test IMAP connection to verify credentials
+        try:
+            test_provider = NaverProvider({
+                "username": email,
+                "password": password,
+                "server": "imap.naver.com",  # INCOMING SERVER
+                "port": 993,  # SSL/TLS
+            })
+
+            # Try to connect
+            connected = await test_provider.connect()
+            if not connected:
+                raise ValueError(
+                    "Failed to connect to Naver IMAP server. Please check your credentials.")
+
+            # Get email address from connection (verify it works)
+            await test_provider.disconnect()
+        except Exception as e:
+            logger.error(f"Naver IMAP connection test failed: {e}")
+            raise ValueError(f"Failed to verify Naver credentials: {str(e)}")
+
+        # Check if account already exists
+        existing_account = db.query(EmailAccount).filter(
+            EmailAccount.user_id == user_id,
+            EmailAccount.email_address == email.lower(),
+            EmailAccount.provider_type == EmailProviderType.NAVER,
+        ).first()
+
+        if existing_account:
+            # Update existing account credentials
+            existing_account.credentials = {
+                "username": email.lower(),
+                "password": password,  # In production, encrypt this
+                # INCOMING SERVER: imap.naver.com:993 (SSL/TLS)
+                "server": "imap.naver.com",
+                "port": 993,
+                "smtp_server": "smtp.naver.com",  # OUTGOING SERVER: smtp.naver.com:587
+                "smtp_port": 587,
+            }
+            existing_account.is_active = True
+            db.commit()
+            db.refresh(existing_account)
+            logger.info(f"Updated Naver account: {email}")
+            return existing_account
+
+        # Create new email account
+        email_account = EmailAccount(
+            user_id=user_id,
+            email_address=email.lower(),
+            provider_type=EmailProviderType.NAVER,
+            display_name=email.lower(),
+            credentials={
+                "username": email.lower(),
+                "password": password,  # In production, encrypt this
+                # INCOMING SERVER: imap.naver.com:993 (SSL/TLS)
+                "server": "imap.naver.com",
+                "port": 993,
+                "smtp_server": "smtp.naver.com",  # OUTGOING SERVER: smtp.naver.com:587
+                "smtp_port": 587,
+            },
+            is_active=True,
+        )
+
+        db.add(email_account)
+        db.commit()
+        db.refresh(email_account)
+
+        logger.info(
+            f"Connected Naver account: {email} for user {user_id}")
         return email_account
