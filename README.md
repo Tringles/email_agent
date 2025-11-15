@@ -150,11 +150,11 @@ flowchart TB
         A1 -->|"Trigger"| AG
     end
 
-    subgraph MCP["MCP Server (AI Tools)"]
-        AG -->|"Use Tools"| MCP
-        MCP -->|"summarize"| LLM["LLM API<br/>(OpenAI)"]
-        MCP -->|"classify"| LLM
-        MCP -->|"vector_search"| V
+    subgraph MCPTools["MCP Server (AI Tools)"]
+        AG -->|"Use Tools"| MCPTools
+        MCPTools -->|"summarize"| LLM["LLM API<br/>(OpenAI)"]
+        MCPTools -->|"classify"| LLM
+        MCPTools -->|"vector_search"| V
     end
 
     FE --->|"User Actions<br/>(Mark important, Delete, etc.)"| A1
