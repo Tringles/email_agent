@@ -1,2 +1,68 @@
-# Python dependencies
+# Backend Framework
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
 
+# AI Orchestration - LangChain 1.0
+langchain>=1.0.0
+langchain-core
+langchain-community
+langchain-openai
+langgraph
+
+# FastMCP
+fastmcp
+
+# LLM
+openai
+
+# Database - MySQL
+sqlalchemy
+pymysql
+cryptography  # Required for pymysql SSL support
+alembic
+
+# Vector Database
+qdrant-client
+
+# Embeddings
+tiktoken
+
+# Email - Gmail API
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# Storage - S3/MinIO
+boto3
+minio
+
+# Message Queue
+redis
+celery
+
+# HTTP Client
+httpx
+aiohttp
+
+# Environment
+python-dotenv
+
+# Logging
+loguru
+
+# Utilities
+python-dateutil
+pytz
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+
+# Development Tools
+black
+ruff
+mypy
