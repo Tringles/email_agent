@@ -151,11 +151,12 @@ flowchart TB
     end
 
     subgraph MCPTools["MCP Server (AI Tools)"]
-        AG -->|"Use Tools"| MCPTools
-        MCPTools -->|"summarize"| LLM["LLM API<br/>(OpenAI)"]
-        MCPTools -->|"classify"| LLM
-        MCPTools -->|"vector_search"| V
+        MCP["MCP Server"] -->|"summarize"| LLM["LLM API<br/>(OpenAI)"]
+        MCP -->|"classify"| LLM
+        MCP -->|"vector_search"| V
     end
+    
+    AG -->|"Use Tools"| MCP
 
     FE --->|"User Actions<br/>(Mark important, Delete, etc.)"| A1
 ```
