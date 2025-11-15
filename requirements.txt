@@ -56,6 +56,7 @@ loguru
 # Utilities
 python-dateutil
 pytz
+python-jose[cryptography]  # JWT token handling
 
 # Testing
 pytest
