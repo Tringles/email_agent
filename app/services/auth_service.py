@@ -38,6 +38,8 @@ class AuthService:
     
     def get_google_auth_url(self) -> str:
         """Generate Google OAuth authorization URL."""
+        redirect_uri = f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/google/callback"
+        
         flow = Flow.from_client_config(
             {
                 "web": {
@@ -45,12 +47,12 @@ class AuthService:
                     "client_secret": self.google_client_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [f"{settings.API_V1_STR}/auth/google/callback"],
+                    "redirect_uris": [redirect_uri],
                 }
             },
             scopes=self.GOOGLE_SCOPES,
         )
-        flow.redirect_uri = f"{settings.API_V1_STR}/auth/google/callback"
+        flow.redirect_uri = redirect_uri
         
         authorization_url, _ = flow.authorization_url(
             access_type="offline",
@@ -67,6 +69,8 @@ class AuthService:
         Handle Google OAuth callback.
         Exchange code for tokens and create/update user.
         """
+        redirect_uri = f"{settings.API_BASE_URL}{settings.API_V1_STR}/auth/google/callback"
+        
         flow = Flow.from_client_config(
             {
                 "web": {
@@ -74,12 +78,12 @@ class AuthService:
                     "client_secret": self.google_client_secret,
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [f"{settings.API_V1_STR}/auth/google/callback"],
+                    "redirect_uris": [redirect_uri],
                 }
             },
             scopes=self.GOOGLE_SCOPES,
         )
-        flow.redirect_uri = f"{settings.API_V1_STR}/auth/google/callback"
+        flow.redirect_uri = redirect_uri
         
         # Exchange code for tokens
         flow.fetch_token(code=code)

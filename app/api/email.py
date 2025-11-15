@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 
-router = APIRouter(prefix="/api/email", tags=["email"])
+router = APIRouter(prefix="/api/v1/email", tags=["email"])
 
 
 @router.get("/{email_id}")

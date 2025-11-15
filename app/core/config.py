@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     # API
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Email AI Aggregator"
+    API_BASE_URL: str = "http://localhost:8000"  # Base URL for OAuth redirects
+    
+    # JWT
+    JWT_SECRET_KEY: Optional[str] = None  # Set in .env
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
     
     # Logging
     @property

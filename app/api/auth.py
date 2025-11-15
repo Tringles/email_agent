@@ -9,8 +9,9 @@ from loguru import logger
 from app.db.session import get_db
 from app.services.auth_service import AuthService
 from app.core.config import settings
+from app.core.security import create_user_token
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 
 @router.get("/google/login")
@@ -38,12 +39,23 @@ async def google_callback(
         auth_service = AuthService()
         user = await auth_service.handle_google_callback(code, db)
         
-        # TODO: Generate JWT token and redirect to frontend
-        # For now, return user info
+        # Generate JWT token
+        access_token = create_user_token(
+            user_id=user.id,
+            email=user.oauth_email,
+            provider=user.oauth_provider
+        )
+        
         return {
-            "user_id": user.id,
-            "email": user.oauth_email,
-            "provider": user.oauth_provider,
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "email": user.oauth_email,
+                "provider": user.oauth_provider,
+                "display_name": user.display_name,
+                "profile_image_url": user.profile_image_url,
+            },
             "message": "Login successful"
         }
     except Exception as e:
