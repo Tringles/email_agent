@@ -19,12 +19,12 @@
 
 ```env
 # Database - MySQL (Local Development)
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=email_agent
-DB_PASSWORD=email_agent_password
-DB_NAME=email_agent
-DB_CHARSET=utf8mb4
+DB_HOST=
+DB_PORT=
+DB_USER=
+DB_PASSWORD=
+DB_NAME=
+DB_CHARSET=
 ```
 
 ## 다음 단계: Alembic 마이그레이션
