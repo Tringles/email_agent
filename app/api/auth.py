@@ -1,16 +1,18 @@
 """OAuth authentication endpoints."""
 
-from loguru import logger
+import urllib.parse
 from typing import Optional
-from sqlalchemy.orm import Session
-from fastapi.responses import RedirectResponse
-from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.models.user import User
-from app.db.session import get_db
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
+from loguru import logger
+from sqlalchemy.orm import Session
+
 from app.core.config import settings
-from app.services.auth_service import AuthService
 from app.core.security import create_user_token, get_current_user
+from app.db.session import get_db
+from app.models.user import User
+from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -35,6 +37,7 @@ async def google_callback(
     """
     Google OAuth callback endpoint.
     Exchanges authorization code for tokens and creates/updates user.
+    Redirects to frontend callback page with token in URL fragment or query param.
     """
     try:
         auth_service = AuthService()
@@ -47,21 +50,23 @@ async def google_callback(
             provider=user.oauth_provider
         )
 
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "user": {
-                "id": user.id,
-                "email": user.oauth_email,
-                "provider": user.oauth_provider,
-                "display_name": user.display_name,
-                "profile_image_url": user.profile_image_url,
-            },
-            "message": "Login successful"
-        }
+        # Frontend callback URL with token and user info
+        # Encode user info in URL params
+        callback_url = (
+            f"{settings.FRONTEND_URL}/callback?"
+            f"token={urllib.parse.quote(access_token)}&"
+            f"user_id={user.id}&"
+            f"email={urllib.parse.quote(user.oauth_email)}&"
+            f"display_name={urllib.parse.quote(user.display_name or '')}&"
+            f"profile_image_url={urllib.parse.quote(user.profile_image_url or '')}"
+        )
+        
+        return RedirectResponse(url=callback_url)
     except Exception as e:
         logger.error(f"Google OAuth callback error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        # Redirect to frontend error page
+        error_url = f"{settings.FRONTEND_URL}/login?error={str(e)}"
+        return RedirectResponse(url=error_url)
 
 
 @router.get("/naver/login")
