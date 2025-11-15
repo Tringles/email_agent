@@ -100,12 +100,16 @@ project-root/
 │   ├── oauth_flow.md
 │   ├── security_audit.md
 │   ├── server_architecture.md
-│   └── test_email_fetch.md
+│   ├── test_email_fetch.md
+│   ├── minio_setup.md
+│   └── storage_structure.md
 ├── docker/
 │   ├── Dockerfile.app
-│   ├── Dockerfile.mcp
+│   ├── Dockerfile.worker
+│   ├── Dockerfile.beat
 │   ├── docker-compose.yaml
-│   └── nginx.conf
+│   ├── nginx.conf
+│   └── .dockerignore
 ├── scripts/
 │   ├── init_db.py
 │   ├── load_test_data.py
@@ -190,7 +194,8 @@ flowchart TB
 - Attachment 인식 및 메타데이터 추출 ✅ 구현 완료
 - RFC 2047 인코딩 디코딩 (이메일 헤더) ✅ 구현 완료
 - MySQL에 메타데이터 저장 ✅ 구현 완료
-- MIME → S3/MinIO 저장 🚧 구현 예정
+- MIME → S3/MinIO 저장 ✅ 구현 완료
+- 첨부파일 다운로드 ✅ 구현 완료
 
 ### 🧠 AI Agent (LangGraph 기반)
 
@@ -223,13 +228,14 @@ flowchart TB
 
 **이메일 API:** ✅ 구현 완료
 - `GET /api/v1/email`: 이메일 목록 조회 (페이지네이션, 필터링)
-- `GET /api/v1/email/{encrypted_id}`: 이메일 상세 조회
+- `GET /api/v1/email/{encrypted_id}`: 이메일 상세 조회 (자동 읽음 처리)
 - `PATCH /api/v1/email/{encrypted_id}/read`: 읽음 처리
 - `PATCH /api/v1/email/{encrypted_id}/important`: 중요 표시
 - `PATCH /api/v1/email/{encrypted_id}/archive`: 아카이브
-- `DELETE /api/v1/email/{encrypted_id}`: 삭제
+- `DELETE /api/v1/email/{encrypted_id}`: 삭제 (실제 provider에서 삭제, raw.mime 보존)
 - `POST /api/v1/email/ingest`: 수동 동기화 트리거
 - `GET /api/v1/email/{encrypted_id}/summary`: 요약 조회
+- `GET /api/v1/email/{encrypted_id}/attachments/{attachment_index}`: 첨부파일 다운로드
 
 **Agent API:** 🚧 구현 예정
 - `/api/v1/agent/run`: LangGraph 파이프라인 실행
@@ -321,7 +327,8 @@ services/
 ├── email_account_service.py     # 이메일 계정 연결 서비스
 ├── email_service.py             # 이메일 비즈니스 로직
 ├── agent_service.py                 # LangGraph 호출 Wrapper
-└── summarizer_service.py       # 요약 서비스
+├── summarizer_service.py       # 요약 서비스
+└── storage_service.py          # MinIO/S3 스토리지 서비스
 ```
 
 ### `app/models/`
@@ -356,19 +363,19 @@ cp .env.example .env
 
 ```env
 # Environment
-ENVIRONMENT=dev
-DEBUG=true
+ENVIRONMENT=
+DEBUG=
 
 # Database - MySQL (Local Development)
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=root
+DB_HOST=
+DB_PORT=
+DB_USER=
 DB_PASSWORD=
-DB_NAME=email_agent
+DB_NAME=
 
 # Celery
-CELERY_BROKER_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/0
+CELERY_BROKER_URL=
+CELERY_RESULT_BACKEND=
 
 # LLM
 OPENAI_API_KEY=
@@ -376,13 +383,21 @@ OPENAI_API_KEY=
 # Email Providers
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
-GMAIL_REDIRECT_URI=http://localhost:8000/api/v1/auth/email-accounts/gmail/callback
+GOOGLE_REDIRECT_URI=
+GMAIL_REDIRECT_URI=
 
 # Security
-JWT_SECRET_KEY=your-secret-key-change-in-production
+JWT_SECRET_KEY=
 ID_ENCRYPTION_KEY=  # Optional: Generate with 'make generate-id-key'
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=
+
+# Storage - MinIO/S3
+AWS_S3_BUCKET=  # Optional: Default bucket name
+AWS_ACCESS_KEY_ID=  # Optional: For AWS S3
+AWS_SECRET_ACCESS_KEY=  # Optional: For AWS S3
+MINIO_ENDPOINT=  # MinIO API endpoint (not console)
+MINIO_ACCESS_KEY=  # Change in production
+MINIO_SECRET_KEY=  # Change in production
 ```
 
 ### 3. DB 초기화
@@ -444,15 +459,16 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 
 구성:
 
-- `fastapi-app` - FastAPI 서버
-- `mcp-server` - MCP 서버 (AI Tools)
+- `app` - FastAPI 서버
 - `celery-worker` - Celery 워커 (이메일 수집)
 - `celery-beat` - Celery Beat (스케줄링)
 - `mysql` - MySQL 데이터베이스
 - `qdrant` - VectorDB
 - `redis` - Celery broker
-- `minio` - Object Storage
+- `minio` - Object Storage (S3-compatible)
 - `nginx` - 리버스 프록시
+
+**자세한 가이드**: `docker/README.md` 참고
 
 ## ✅ 구현 완료
 
@@ -472,6 +488,14 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [x] ID 암호화를 통한 IDOR 공격 방지
 - [x] 이메일 API 엔드포인트 (목록, 상세, 액션)
 - [x] 계정 관리 API (연결, 목록 조회)
+- [x] MinIO/S3 스토리지 서비스 (raw MIME 및 첨부파일 저장)
+- [x] 첨부파일 다운로드 기능
+- [x] 이메일 삭제 기능 (실제 provider에서 삭제, raw.mime 보존)
+- [x] 이메일 조회 시 자동 읽음 처리
+- [x] 삭제된 이메일 필터링 (is_deleted)
+- [x] DB connection pool 분리 (FastAPI: QueuePool, Celery: NullPool)
+- [x] Celery Redis transport 명시적 설정
+- [x] Docker Compose 설정 (모든 서비스 컨테이너화)
 
 ## 🚧 구현 중 / 예정
 
@@ -480,7 +504,6 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [ ] 중요도 분류 (Classification Node)
 - [ ] Vector Search 및 임베딩 저장
 - [ ] Rule Engine (자동 액션)
-- [ ] S3/MinIO 원본 MIME 저장
 - [ ] MCP Server 구현
 - [ ] Naver OAuth 로그인 (현재는 IMAP만 지원)
 
@@ -508,6 +531,8 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [OAuth 플로우 설명](docs/oauth_flow.md)
 - [서버 아키텍처](docs/server_architecture.md)
 - [실행 체크리스트](docs/execution_checklist.md)
+- [MinIO 설정 가이드](docs/minio_setup.md)
+- [스토리지 구조 설명](docs/storage_structure.md)
 
 ## 📝 License
 
