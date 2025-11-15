@@ -1,14 +1,19 @@
 """Gmail provider implementation using Gmail API."""
 
-from typing import List, Optional
+import base64
+import re
 from datetime import datetime
+from email.utils import parsedate_to_datetime
+from typing import List, Optional
+
+from googleapiclient.errors import HttpError
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from dateutil.parser import parse
 from loguru import logger
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-
-from app.tasks.providers.base import EmailProvider, EmailMessage
+from app.tasks.providers.base import EmailMessage, EmailProvider
 
 
 class GmailProvider(EmailProvider):
