@@ -5,16 +5,18 @@ from loguru import logger
 from typing import Optional
 from celery import shared_task
 from datetime import datetime, timedelta
+from sqlalchemy.exc import OperationalError
 
 from app.db.session import SessionLocal
+from app.core.celery_app import celery_app
 from app.models.email import Email, EmailStatus
-from app.tasks.providers.base import EmailMessage
 from app.tasks.providers.factory import get_email_provider
 from app.db.repositories.email_repo import EmailRepository
+from app.services.storage_service import get_storage_service
 from app.db.repositories.email_account_repo import EmailAccountRepository
 
 
-@shared_task(name="fetch_emails_task")
+@shared_task(name="fetch_emails_task", app=celery_app)
 def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, since: Optional[datetime] = None):
     """
     Celery task to fetch emails for a specific account and save to DB.
@@ -37,9 +39,19 @@ def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, si
         emails = asyncio.run(provider.fetch_emails(limit=50, since=since))
 
         # Save to database
-        db = SessionLocal()
+        db = None
         try:
+            db = SessionLocal()
             email_repo = EmailRepository(db)
+            account_repo = EmailAccountRepository(db)
+            storage = get_storage_service()
+
+            # Get account to retrieve user_id
+            account = account_repo.get_account_by_id(account_id)
+            if not account:
+                raise ValueError(f"Email account {account_id} not found")
+            
+            user_id = account.user_id
 
             saved_count = 0
             skipped_count = 0
@@ -55,8 +67,26 @@ def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, si
                     skipped_count += 1
                     continue
 
+                # Save raw MIME to MinIO if available
+                raw_mime_storage_path = None
+                if email_msg.raw_mime:
+                    try:
+                        # Encode raw_mime to bytes if it's a string
+                        if isinstance(email_msg.raw_mime, str):
+                            raw_mime_bytes = email_msg.raw_mime.encode('utf-8')
+                        else:
+                            raw_mime_bytes = email_msg.raw_mime
+                        
+                        # We'll get email_id after creating the email record
+                        # For now, use a temporary path and update later
+                        pass
+                    except Exception as e:
+                        logger.warning(f"Failed to prepare raw MIME for storage: {e}")
+
                 # Convert EmailMessage to DB model and save
                 attachments = email_msg.attachments or []
+                
+                # Create email record first to get email_id
                 email_data = {
                     "email_account_id": account_id,
                     "provider_message_id": email_msg.message_id,
@@ -69,25 +99,141 @@ def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, si
                     "attachments": attachments,
                     "attachment_count": len(attachments),
                     "has_attachments": len(attachments) > 0,
-                    "raw_mime_storage_path": None,  # TODO: Save to S3/MinIO
+                    "raw_mime_storage_path": None,  # Will be updated after saving
                     "status": EmailStatus.PENDING,
                     "is_processed": False,
                 }
-                email_repo.create_email(email_data)
+                email = email_repo.create_email(email_data)
+                email_id = email.id
+                
+                # Save raw MIME to MinIO
+                if email_msg.raw_mime:
+                    try:
+                        if isinstance(email_msg.raw_mime, str):
+                            raw_mime_bytes = email_msg.raw_mime.encode('utf-8')
+                        else:
+                            raw_mime_bytes = email_msg.raw_mime
+                        
+                        raw_mime_path = storage.save_raw_mime(
+                            user_id=user_id,
+                            email_id=email_id,
+                            mime_data=raw_mime_bytes
+                        )
+                        if raw_mime_path:
+                            email.raw_mime_storage_path = raw_mime_path
+                            email.raw_mime_size = len(raw_mime_bytes)
+                            logger.debug(f"Saved raw MIME to {raw_mime_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to save raw MIME to storage: {e}")
+
+                # Save attachments to MinIO
+                updated_attachments = []
+                for idx, attachment in enumerate(attachments):
+                    try:
+                        attachment_data = None
+                        
+                        # Download attachment data based on provider
+                        if provider_type == "gmail":
+                            # Gmail: download using attachment_id
+                            attachment_id = attachment.get("attachment_id")
+                            if attachment_id:
+                                attachment_data = asyncio.run(
+                                    provider.download_attachment(
+                                        email_msg.message_id,
+                                        attachment_id
+                                    )
+                                )
+                        elif provider_type == "naver":
+                            # Naver: attachment data is already in the attachment dict
+                            attachment_data = attachment.get("data")
+                            if attachment_data:
+                                filename = attachment.get("filename", f"attachment_{idx}")
+                                mime_type = attachment.get("mime_type")
+                                
+                                storage_path = storage.save_attachment(
+                                    user_id=user_id,
+                                    email_id=email_id,
+                                    index=idx,
+                                    filename=filename,
+                                    attachment_data=attachment_data,
+                                    content_type=mime_type
+                                )
+                                
+                                if storage_path:
+                                    # Update attachment metadata with storage path
+                                    updated_attachment = attachment.copy()
+                                    updated_attachment["storage_path"] = storage_path
+                                    updated_attachment["index"] = idx
+                                    # Remove data from metadata (already stored in MinIO)
+                                    updated_attachment.pop("data", None)
+                                    updated_attachments.append(updated_attachment)
+                                    logger.debug(f"Saved Naver attachment {filename} to {storage_path}")
+                                else:
+                                    updated_attachments.append(attachment)
+                            else:
+                                updated_attachments.append(attachment)
+                            continue
+                        
+                        if attachment_data:
+                            filename = attachment.get("filename", f"attachment_{idx}")
+                            mime_type = attachment.get("mime_type")
+                            
+                            storage_path = storage.save_attachment(
+                                user_id=user_id,
+                                email_id=email_id,
+                                index=idx,
+                                filename=filename,
+                                attachment_data=attachment_data,
+                                content_type=mime_type
+                            )
+                            
+                            if storage_path:
+                                # Update attachment metadata with storage path
+                                updated_attachment = attachment.copy()
+                                updated_attachment["storage_path"] = storage_path
+                                updated_attachment["index"] = idx
+                                updated_attachments.append(updated_attachment)
+                                logger.debug(f"Saved attachment {filename} to {storage_path}")
+                            else:
+                                updated_attachments.append(attachment)
+                        else:
+                            # Keep original attachment metadata even if download failed
+                            updated_attachments.append(attachment)
+                    except Exception as e:
+                        logger.error(f"Failed to save attachment {idx} to storage: {e}")
+                        # Keep original attachment metadata
+                        updated_attachments.append(attachment)
+                
+                # Update email with attachment storage paths
+                if updated_attachments != attachments:
+                    email.attachments = updated_attachments
+                
+                db.commit()
                 saved_count += 1
 
-            db.commit()
             logger.info(
                 f"Saved {saved_count} new emails, skipped {skipped_count} duplicates "
                 f"for account {account_id}"
             )
+        except OperationalError as e:
+            error_str = str(e).lower()
+            if 'connection refused' in error_str or 'can\'t connect' in error_str:
+                logger.error(
+                    f"Database connection failed for account {account_id}: {e}. "
+                    f"Please ensure MySQL is running."
+                )
+            if db:
+                db.rollback()
+            raise e
         except Exception as e:
-            db.rollback()
+            if db:
+                db.rollback()
             logger.error(
                 f"Error saving emails to DB for account {account_id}: {e}")
             raise e
         finally:
-            db.close()
+            if db:
+                db.close()
 
         # Disconnect provider
         asyncio.run(provider.disconnect())
@@ -108,7 +254,7 @@ def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, si
         }
 
 
-@shared_task(name="fetch_emails_for_account")
+@shared_task(name="fetch_emails_for_account", app=celery_app)
 def fetch_emails_for_account(account_id: int):
     """
     Celery task to fetch emails for a specific account.
@@ -120,8 +266,9 @@ def fetch_emails_for_account(account_id: int):
     Returns:
         Result dictionary with fetch status
     """
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         # Get email account from DB
         account_repo = EmailAccountRepository(db)
         account = account_repo.get_account_by_id(account_id)
@@ -184,13 +331,36 @@ def fetch_emails_for_account(account_id: int):
 
         return result
 
+    except OperationalError as e:
+        error_str = str(e).lower()
+        if 'connection refused' in error_str or 'can\'t connect' in error_str:
+            logger.error(
+                f"Database connection failed for account {account_id}: {e}. "
+                f"Please ensure MySQL is running."
+            )
+        logger.exception(
+            f"Error in fetch_emails_for_account for account {account_id}: {e}")
+        try:
+            if db:
+                account_repo = EmailAccountRepository(db)
+                account_repo.update_last_fetch(
+                    account_id, success=False, error_message=str(e))
+        except:
+            pass
+
+        return {
+            "account_id": account_id,
+            "status": "error",
+            "error": f"Database connection failed: {str(e)}"
+        }
     except Exception as e:
         logger.exception(
             f"Error in fetch_emails_for_account for account {account_id}: {e}")
         try:
-            account_repo = EmailAccountRepository(db)
-            account_repo.update_last_fetch(
-                account_id, success=False, error_message=str(e))
+            if db:
+                account_repo = EmailAccountRepository(db)
+                account_repo.update_last_fetch(
+                    account_id, success=False, error_message=str(e))
         except:
             pass
 
@@ -200,17 +370,19 @@ def fetch_emails_for_account(account_id: int):
             "error": str(e)
         }
     finally:
-        db.close()
+        if db:
+            db.close()
 
 
-@shared_task(name="fetch_all_accounts_emails")
+@shared_task(name="fetch_all_accounts_emails", app=celery_app)
 def fetch_all_accounts_emails():
     """
     Scheduled Celery task to fetch emails for all active accounts.
     This should be called periodically (e.g., every 5 minutes).
     """
-    db = SessionLocal()
+    db = None
     try:
+        db = SessionLocal()
         account_repo = EmailAccountRepository(db)
         active_accounts = account_repo.get_active_accounts()
 
@@ -244,6 +416,18 @@ def fetch_all_accounts_emails():
             "accounts": results
         }
 
+    except OperationalError as e:
+        error_str = str(e).lower()
+        if 'connection refused' in error_str or 'can\'t connect' in error_str:
+            logger.error(
+                f"Database connection failed: {e}. "
+                f"Please ensure MySQL is running."
+            )
+        logger.exception(f"Error in fetch_all_accounts_emails: {e}")
+        return {
+            "status": "error",
+            "error": f"Database connection failed: {str(e)}"
+        }
     except Exception as e:
         logger.exception(f"Error in fetch_all_accounts_emails: {e}")
         return {
@@ -251,4 +435,5 @@ def fetch_all_accounts_emails():
             "error": str(e)
         }
     finally:
-        db.close()
+        if db:
+            db.close()
