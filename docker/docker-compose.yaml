@@ -1,0 +1,289 @@
+version: '3.8'
+
+# Docker Compose automatically reads .env file from the project root
+# Use ${VARIABLE_NAME} syntax to reference environment variables
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: email_agent_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-email_agent}
+      MYSQL_USER: ${DB_USER:-email_agent}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-email_agent_password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-prootpassword"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - email_agent_network
+
+  # Redis (Celery broker and result backend)
+  redis:
+    image: redis:7-alpine
+    container_name: email_agent_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - email_agent_network
+
+  # MinIO (Object Storage)
+  minio:
+    image: minio/minio
+    container_name: email_agent_minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - email_agent_network
+
+  # Qdrant (Vector Database)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: email_agent_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - email_agent_network
+
+  # FastAPI Application
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    container_name: email_agent_app
+    environment:
+      # Environment
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      DEBUG: ${DEBUG:-true}
+      
+      # Database
+      DB_HOST: mysql
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER:-email_agent}
+      DB_PASSWORD: ${DB_PASSWORD:-email_agent_password}
+      DB_NAME: ${DB_NAME:-email_agent}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      
+      # Redis
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      
+      # MinIO
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      
+      # Qdrant
+      VECTOR_DB_URL: ${VECTOR_DB_URL:-http://qdrant:6333}
+      VECTOR_DB_API_KEY: ${VECTOR_DB_API_KEY:-}
+      
+      # API
+      API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      
+      # JWT
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      ID_ENCRYPTION_KEY: ${ID_ENCRYPTION_KEY:-}
+      
+      # OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      NAVER_IMAP_USER: ${NAVER_IMAP_USER:-}
+      NAVER_IMAP_PASSWORD: ${NAVER_IMAP_PASSWORD:-}
+      
+      # LLM
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      
+      # AWS S3 (optional, if using S3 instead of MinIO)
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../app:/app/app
+      - ../alembic:/app/alembic
+      - ../alembic.ini:/app/alembic.ini
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    networks:
+      - email_agent_network
+    restart: unless-stopped
+
+  # Celery Worker
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    container_name: email_agent_worker
+    environment:
+      # Environment
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      DEBUG: ${DEBUG:-true}
+      
+      # Database
+      DB_HOST: mysql
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER:-email_agent}
+      DB_PASSWORD: ${DB_PASSWORD:-email_agent_password}
+      DB_NAME: ${DB_NAME:-email_agent}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      
+      # Redis
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      
+      # MinIO
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      
+      # Qdrant
+      VECTOR_DB_URL: ${VECTOR_DB_URL:-http://qdrant:6333}
+      VECTOR_DB_API_KEY: ${VECTOR_DB_API_KEY:-}
+      
+      # OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      NAVER_IMAP_USER: ${NAVER_IMAP_USER:-}
+      NAVER_IMAP_PASSWORD: ${NAVER_IMAP_PASSWORD:-}
+      
+      # LLM
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      
+      # AWS S3 (optional)
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      
+      # JWT
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      ID_ENCRYPTION_KEY: ${ID_ENCRYPTION_KEY:-}
+    volumes:
+      - ../app:/app/app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - email_agent_network
+    restart: unless-stopped
+
+  # Celery Beat (Scheduler)
+  celery-beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.beat
+    container_name: email_agent_beat
+    environment:
+      # Environment
+      ENVIRONMENT: ${ENVIRONMENT:-dev}
+      DEBUG: ${DEBUG:-true}
+      
+      # Database
+      DB_HOST: mysql
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER:-email_agent}
+      DB_PASSWORD: ${DB_PASSWORD:-email_agent_password}
+      DB_NAME: ${DB_NAME:-email_agent}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      
+      # Redis
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      
+      # MinIO
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://minio:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      
+      # Qdrant
+      VECTOR_DB_URL: ${VECTOR_DB_URL:-http://qdrant:6333}
+      VECTOR_DB_API_KEY: ${VECTOR_DB_API_KEY:-}
+      
+      # OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      NAVER_IMAP_USER: ${NAVER_IMAP_USER:-}
+      NAVER_IMAP_PASSWORD: ${NAVER_IMAP_PASSWORD:-}
+      
+      # LLM
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      
+      # AWS S3 (optional)
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      
+      # JWT
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-secret-key-in-production}
+      ID_ENCRYPTION_KEY: ${ID_ENCRYPTION_KEY:-}
+    volumes:
+      - ../app:/app/app
+      - celerybeat_data:/app/celerybeat-schedule
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - email_agent_network
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  redis_data:
+  minio_data:
+  qdrant_data:
+  celerybeat_data:
+
+networks:
+  email_agent_network:
+    driver: bridge
+
