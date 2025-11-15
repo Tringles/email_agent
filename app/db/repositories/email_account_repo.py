@@ -1,6 +1,7 @@
 """Email account repository for database operations."""
 
 from loguru import logger
+from datetime import datetime
 from typing import List, Optional
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,20 @@ class EmailAccountRepository:
     def get_account_by_id(self, account_id: int) -> Optional[EmailAccount]:
         """Get email account by ID."""
         return self.db.query(EmailAccount).filter(EmailAccount.id == account_id).first()
+
+    def get_accounts_by_user(self, user_id: int) -> List[EmailAccount]:
+        """
+        Get all email accounts for a specific user.
+
+        Args:
+            user_id: User ID
+
+        Returns:
+            List of EmailAccount objects (both active and inactive)
+        """
+        return self.db.query(EmailAccount).filter(
+            EmailAccount.user_id == user_id
+        ).order_by(EmailAccount.created_at.desc()).all()
 
     def get_active_accounts(self, user_id: Optional[int] = None) -> List[EmailAccount]:
         """
@@ -81,7 +96,6 @@ class EmailAccountRepository:
         """
         account = self.get_account_by_id(account_id)
         if account:
-            from datetime import datetime
             if success:
                 account.last_fetch_at = datetime.now()
                 account.last_fetch_error = None
