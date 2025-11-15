@@ -1,12 +1,13 @@
 """Celery tasks for email fetching and processing."""
 
+import asyncio
 from loguru import logger
 from typing import Optional
 from celery import shared_task
 from datetime import datetime, timedelta
 
 from app.db.session import SessionLocal
-from app.models.email import EmailStatus
+from app.models.email import Email, EmailStatus
 from app.tasks.providers.base import EmailMessage
 from app.tasks.providers.factory import get_email_provider
 from app.db.repositories.email_repo import EmailRepository
@@ -33,7 +34,6 @@ def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, si
         provider = get_email_provider(provider_type, credentials)
 
         # Fetch emails (async function needs to be run in async context)
-        import asyncio
         emails = asyncio.run(provider.fetch_emails(limit=50, since=since))
 
         # Save to database
@@ -46,7 +46,6 @@ def fetch_emails_task(account_id: int, provider_type: str, credentials: dict, si
 
             for email_msg in emails:
                 # Check if email already exists (by provider_message_id)
-                from app.models.email import Email
                 existing = db.query(Email).filter(
                     Email.email_account_id == account_id,
                     Email.provider_message_id == email_msg.message_id

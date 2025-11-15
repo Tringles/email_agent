@@ -3,8 +3,8 @@
 from loguru import logger
 from datetime import datetime
 from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
 from typing import List, Optional, Tuple
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.email import Email, EmailStatus
 from app.models.email_account import EmailAccount
@@ -69,7 +69,10 @@ class EmailRepository:
             Tuple of (list of Email objects, total count)
         """
         # Start with base query - join with EmailAccount to filter by user_id
-        query = self.db.query(Email).join(
+        # Use joinedload to eager load email_account relationship
+        query = self.db.query(Email).options(
+            joinedload(Email.email_account)
+        ).join(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(EmailAccount.user_id == user_id)
 
@@ -126,7 +129,10 @@ class EmailRepository:
         Returns:
             Email object or None
         """
-        query = self.db.query(Email).filter(Email.id == email_id)
+        # Use joinedload to eager load email_account relationship
+        query = self.db.query(Email).options(
+            joinedload(Email.email_account)
+        ).filter(Email.id == email_id)
 
         # If user_id provided, verify ownership
         if user_id:
