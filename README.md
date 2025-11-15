@@ -388,7 +388,7 @@ GMAIL_REDIRECT_URI=
 
 # Security
 JWT_SECRET_KEY=
-ID_ENCRYPTION_KEY=  # Optional: Generate with 'make generate-id-key'
+ID_ENCRYPTION_KEY=  # Deprecated: No longer used (base62 encoding)
 FRONTEND_URL=
 
 # Storage - MinIO/S3

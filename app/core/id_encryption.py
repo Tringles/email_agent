@@ -1,113 +1,129 @@
-"""ID encryption utilities for preventing IDOR attacks."""
+"""ID encoding utilities for preventing IDOR attacks using base62."""
 
-import hashlib
-from base64 import urlsafe_b64encode
-from cryptography.fernet import Fernet
 from loguru import logger
 from typing import Optional
 
-from app.core.config import settings
+
+# Base62 alphabet: 0-9, a-z, A-Z
+BASE62_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _base62_encode(num: int) -> str:
+    """Encode an integer to base62 string."""
+    if num == 0:
+        return BASE62_ALPHABET[0]
+    
+    encoded = []
+    while num > 0:
+        encoded.append(BASE62_ALPHABET[num % 62])
+        num //= 62
+    
+    return ''.join(reversed(encoded))
+
+
+def _base62_decode(encoded: str) -> int:
+    """Decode a base62 string to integer."""
+    num = 0
+    for char in encoded:
+        if char not in BASE62_ALPHABET:
+            raise ValueError(f"Invalid base62 character: {char}")
+        num = num * 62 + BASE62_ALPHABET.index(char)
+    return num
 
 
 class IDEncryption:
-    """Encrypt and decrypt IDs to prevent IDOR attacks."""
-
-    @staticmethod
-    def _get_encryption_key() -> bytes:
-        """Get encryption key from settings."""
-        # Check if ID_ENCRYPTION_KEY is set
-        id_key = getattr(settings, 'ID_ENCRYPTION_KEY', None)
-        if id_key:
-            # If it's already a Fernet key (base64 encoded 32 bytes), use it directly
-            try:
-                # Validate it's a valid Fernet key
-                Fernet(id_key.encode())
-                return id_key.encode()
-            except Exception:
-                # If not valid, derive from it
-                pass
-        
-        # Fallback: derive from JWT_SECRET_KEY
-        secret = settings.JWT_SECRET_KEY or "default-secret-key-change-in-production"
-        # Use SHA256 to get consistent 32 bytes
-        key_bytes = hashlib.sha256(secret.encode()).digest()
-        # Fernet requires base64-encoded 32-byte key
-        return urlsafe_b64encode(key_bytes)
+    """Encode and decode IDs using base62 to prevent IDOR attacks."""
 
     def __init__(self):
-        """Initialize encryption."""
-        try:
-            key = self._get_encryption_key()
-            self.cipher = Fernet(key)
-        except Exception as e:
-            logger.error(f"Failed to initialize ID encryption: {e}")
-            # Fallback: generate a new key (not recommended for production)
-            self.cipher = Fernet(Fernet.generate_key())
-            logger.warning("Using generated encryption key. Set ID_ENCRYPTION_KEY in settings for production.")
+        """Initialize encoding."""
+        pass
 
     def encrypt_id(self, resource_type: str, id_value: int) -> str:
         """
-        Encrypt an ID with resource type prefix.
+        Encode an ID with resource type prefix using base62.
         
         Args:
             resource_type: Type of resource (e.g., 'email', 'account', 'user')
-            id_value: Integer ID to encrypt
+            id_value: Integer ID to encode
             
         Returns:
-            Encrypted ID string (URL-safe)
+            Encoded ID string (base62)
         """
         try:
-            # Format: resource_type:id_value
-            plaintext = f"{resource_type}:{id_value}".encode()
-            encrypted = self.cipher.encrypt(plaintext)
-            # Return base64 URL-safe encoded string
-            return encrypted.decode()
+            # Use single character prefix for resource type
+            type_prefix = {
+                'email': 'e',
+                'account': 'a',
+                'user': 'u'
+            }.get(resource_type, 'x')
+            
+            # Encode ID as base62
+            encoded_id = _base62_encode(id_value)
+            
+            # Return: prefix + encoded_id
+            return f"{type_prefix}{encoded_id}"
         except Exception as e:
-            logger.error(f"Failed to encrypt ID {id_value}: {e}")
-            raise ValueError(f"Failed to encrypt ID: {e}")
+            logger.error(f"Failed to encode ID {id_value}: {e}")
+            raise ValueError(f"Failed to encode ID: {e}")
 
-    def decrypt_id(self, encrypted_id: str) -> tuple[str, int]:
+    def decrypt_id(self, encoded_id: str) -> tuple[str, int]:
         """
-        Decrypt an encrypted ID.
+        Decode an encoded ID.
         
         Args:
-            encrypted_id: Encrypted ID string
+            encoded_id: Encoded ID string (base62)
             
         Returns:
             Tuple of (resource_type, id_value)
             
         Raises:
-            ValueError: If decryption fails or format is invalid
+            ValueError: If decoding fails or format is invalid
         """
         try:
-            decrypted = self.cipher.decrypt(encrypted_id.encode())
-            parts = decrypted.decode().split(":", 1)
-            if len(parts) != 2:
-                raise ValueError("Invalid encrypted ID format")
-            resource_type, id_str = parts
-            return resource_type, int(id_str)
+            if not encoded_id or len(encoded_id) < 2:
+                raise ValueError("Invalid encoded ID format")
+            
+            # Extract prefix and encoded value
+            prefix = encoded_id[0]
+            encoded_value = encoded_id[1:]
+            
+            # Map prefix to resource type
+            type_map = {
+                'e': 'email',
+                'a': 'account',
+                'u': 'user'
+            }
+            
+            resource_type = type_map.get(prefix)
+            if not resource_type:
+                raise ValueError(f"Unknown resource type prefix: {prefix}")
+            
+            # Decode base62
+            id_value = _base62_decode(encoded_value)
+            
+            return resource_type, id_value
         except Exception as e:
-            logger.error(f"Failed to decrypt ID {encrypted_id}: {e}")
-            raise ValueError(f"Invalid or corrupted encrypted ID: {e}")
+            logger.error(f"Failed to decode ID {encoded_id}: {e}")
+            raise ValueError(f"Invalid or corrupted encoded ID: {e}")
 
     def encrypt_email_id(self, email_id: int) -> str:
-        """Encrypt email ID."""
+        """Encode email ID."""
         return self.encrypt_id("email", email_id)
 
-    def decrypt_email_id(self, encrypted_id: str) -> int:
-        """Decrypt email ID."""
-        resource_type, id_value = self.decrypt_id(encrypted_id)
+    def decrypt_email_id(self, encoded_id: str) -> int:
+        """Decode email ID."""
+        resource_type, id_value = self.decrypt_id(encoded_id)
         if resource_type != "email":
             raise ValueError(f"Expected email ID, got {resource_type}")
         return id_value
 
     def encrypt_account_id(self, account_id: int) -> str:
-        """Encrypt account ID."""
+        """Encode account ID."""
         return self.encrypt_id("account", account_id)
 
-    def decrypt_account_id(self, encrypted_id: str) -> int:
-        """Decrypt account ID."""
-        resource_type, id_value = self.decrypt_id(encrypted_id)
+    def decrypt_account_id(self, encoded_id: str) -> int:
+        """Decode account ID."""
+        resource_type, id_value = self.decrypt_id(encoded_id)
         if resource_type != "account":
             raise ValueError(f"Expected account ID, got {resource_type}")
         return id_value
@@ -126,21 +142,20 @@ def get_id_encryption() -> IDEncryption:
 
 
 def encrypt_email_id(email_id: int) -> str:
-    """Encrypt email ID (convenience function)."""
+    """Encode email ID (convenience function)."""
     return get_id_encryption().encrypt_email_id(email_id)
 
 
-def decrypt_email_id(encrypted_id: str) -> int:
-    """Decrypt email ID (convenience function)."""
-    return get_id_encryption().decrypt_email_id(encrypted_id)
+def decrypt_email_id(encoded_id: str) -> int:
+    """Decode email ID (convenience function)."""
+    return get_id_encryption().decrypt_email_id(encoded_id)
 
 
 def encrypt_account_id(account_id: int) -> str:
-    """Encrypt account ID (convenience function)."""
+    """Encode account ID (convenience function)."""
     return get_id_encryption().encrypt_account_id(account_id)
 
 
-def decrypt_account_id(encrypted_id: str) -> int:
-    """Decrypt account ID (convenience function)."""
-    return get_id_encryption().decrypt_account_id(encrypted_id)
-
+def decrypt_account_id(encoded_id: str) -> int:
+    """Decode account ID (convenience function)."""
+    return get_id_encryption().decrypt_account_id(encoded_id)
