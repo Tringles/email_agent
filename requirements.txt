@@ -57,7 +57,6 @@ loguru
 python-dateutil
 pytz
 python-jose[cryptography]  # JWT token handling
-cryptography  # ID encryption (Fernet)
 
 # Testing
 pytest
