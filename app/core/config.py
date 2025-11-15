@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
+    # ID Encryption (for preventing IDOR attacks)
+    # Optional: Set ID_ENCRYPTION_KEY in .env (base64-encoded Fernet key)
+    # If not set, will derive from JWT_SECRET_KEY
+    ID_ENCRYPTION_KEY: Optional[str] = None
+
     # Logging
     @property
     def LOG_LEVEL(self) -> str:
