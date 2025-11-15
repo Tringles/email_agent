@@ -85,9 +85,18 @@ project-root/
 │   ├── langgraph/
 │   └── services/
 ├── docs/
+│   ├── alembic_usage.md
+│   ├── celery_beat_setup.md
 │   ├── database_relationships.md
+│   ├── database_setup.md
+│   ├── email_processing_workflow.md
+│   ├── execution_checklist.md
+│   ├── gmail_account_setup.md
+│   ├── google_oauth_setup.md
 │   ├── oauth_flow.md
-│   └── server_architecture.md
+│   ├── security_audit.md
+│   ├── server_architecture.md
+│   └── test_email_fetch.md
 ├── docker/
 │   ├── Dockerfile.app
 │   ├── Dockerfile.mcp
@@ -97,7 +106,12 @@ project-root/
 │   ├── init_db.py
 │   ├── load_test_data.py
 │   └── benchmark_agent.py
-├── .env.example
+├── alembic.ini
+├── alembic/
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
+├── .env.sample
 ├── requirements.txt
 ├── README.md
 └── Makefile
@@ -165,20 +179,23 @@ flowchart TB
 
 ### 🔄 Email Aggregation
 
-- **Gmail API** (OAuth + Gmail SDK)
-- **Naver IMAP** (IDLE or polling)
-- **Celery Scheduled Tasks**: Background에서 주기적으로 이메일 수집 (기본 5분마다)
-- 다중 메일 계정 → 단일 inbox로 수집
-- MIME → S3/MinIO 저장 + structured metadata 추출
-- MySQL에 메타데이터 저장
+- **Gmail API** (OAuth + Gmail SDK) ✅ 구현 완료
+- **Naver IMAP** (IDLE or polling) 🚧 구현 중
+- **Celery Scheduled Tasks**: Background에서 주기적으로 이메일 수집 (기본 5분마다) ✅ 구현 완료
+- 다중 메일 계정 → 단일 inbox로 수집 ✅ 구현 완료
+- Attachment 인식 및 메타데이터 추출 ✅ 구현 완료
+- MySQL에 메타데이터 저장 ✅ 구현 완료
+- MIME → S3/MinIO 저장 🚧 구현 예정
 
 ### 🧠 AI Agent (LangGraph 기반)
 
-- **요약 Summarization Node**
-- **중요도 평가 Node**
-- **유사도 기반 Vector Search** (과거 메일 참고)
-- **Rule Engine** (자동 삭제/이동/태깅)
-- **상태 기반 재시도** (State Persistence)
+- **요약 Summarization Node** 🚧 구현 예정
+- **중요도 평가 Node** 🚧 구현 예정
+- **유사도 기반 Vector Search** (과거 메일 참고) 🚧 구현 예정
+- **Rule Engine** (자동 삭제/이동/태깅) 🚧 구현 예정
+- **상태 기반 재시도** (State Persistence) 🚧 구현 예정
+
+**현재 상태**: 이메일은 `PENDING` 상태로 저장되며, AI Agent 처리는 구현 예정입니다.
 
 ### ⚙️ FastMCP Tools
 
@@ -190,22 +207,23 @@ flowchart TB
 
 ### 📡 API Server (FastAPI)
 
-**OAuth 인증:**
-- `/api/auth/google/login`: Google 로그인
-- `/api/auth/google/callback`: Google 로그인 콜백
-- `/api/auth/naver/login`: Naver 로그인
-- `/api/auth/email-accounts/gmail/connect`: Gmail 계정 연결
+**OAuth 인증:** ✅ 구현 완료
+- `/api/v1/auth/google/login`: Google SSO 로그인
+- `/api/v1/auth/google/callback`: Google 로그인 콜백 (JWT 토큰 반환)
+- `/api/v1/auth/naver/login`: Naver 로그인 🚧 구현 예정
+- `/api/v1/auth/email-accounts/gmail/connect`: Gmail 계정 연결
+- `/api/v1/auth/email-accounts/gmail/callback`: Gmail 계정 연결 콜백
 
-**이메일 API:**
-- `/api/email/{id}`: 이메일 조회
-- `/api/email/ingest`: 수신 트리거
-- `/api/email/{id}/summary`: 요약 조회
+**이메일 API:** 🚧 기본 구조만 구현
+- `/api/v1/email/{id}`: 이메일 조회
+- `/api/v1/email/ingest`: 수신 트리거
+- `/api/v1/email/{id}/summary`: 요약 조회
 
-**Agent API:**
-- `/api/agent/run`: LangGraph 파이프라인 실행
+**Agent API:** 🚧 구현 예정
+- `/api/v1/agent/run`: LangGraph 파이프라인 실행
 
-**Health Check:**
-- `/api/health`: 헬스 체크
+**Health Check:** ✅ 구현 완료
+- `/api/v1/health`: 헬스 체크
 
 ### 🗄 Storage
 
@@ -352,43 +370,48 @@ NAVER_IMAP_PASSWORD=
 
 ### 3. DB 초기화
 
-**방법 1: Alembic 마이그레이션 사용 (권장)**
+**방법 1: Alembic 마이그레이션 사용 (권장)** ✅ 설정 완료
 ```bash
 # 초기 마이그레이션 생성
-alembic revision --autogenerate -m "Initial migration"
+conda run -n ai alembic revision --autogenerate -m "Initial migration"
 
 # 데이터베이스에 테이블 생성
-alembic upgrade head
+conda run -n ai alembic upgrade head
 ```
 
 **방법 2: 스크립트 사용 (빠른 설정)**
 ```bash
-make init-db
-# 또는
-python scripts/init_db.py
+conda run -n ai python scripts/init_db.py
 ```
+
+**자세한 가이드**: `docs/database_setup.md`, `docs/alembic_usage.md` 참고
 
 ### 4. 앱 실행
 
 **FastAPI 서버:**
 ```bash
-uvicorn app.main:app --reload
-```
-
-**MCP Server (별도 터미널):**
-```bash
-python app/mcp/server.py
+conda run -n ai uvicorn app.main:app --reload
 ```
 
 **Celery Worker (별도 터미널):**
 ```bash
-celery -A app.workers.email_worker worker --loglevel=info
+conda run -n ai celery -A app.workers.email_worker worker --loglevel=info
 ```
 
 **Celery Beat (별도 터미널, 스케줄링):**
 ```bash
-celery -A app.workers.email_worker beat --loglevel=info
+conda run -n ai celery -A app.workers.email_worker beat --loglevel=info
 ```
+
+**MCP Server (별도 터미널):** 🚧 구현 예정
+```bash
+conda run -n ai python app/mcp/server.py
+```
+
+**자세한 가이드**: 
+- Celery Beat: `docs/celery_beat_setup.md`
+- Gmail 계정 연결: `docs/gmail_account_setup.md`
+- 이메일 가져오기 테스트: `docs/test_email_fetch.md`
 
 ## 🧪 Tests
 
@@ -414,13 +437,53 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - `minio` - Object Storage
 - `nginx` - 리버스 프록시
 
+## ✅ 구현 완료
+
+- [x] Google SSO 로그인 (OAuth 2.0)
+- [x] Gmail 계정 연결 및 OAuth 토큰 관리
+- [x] Celery를 통한 백그라운드 이메일 수집
+- [x] Gmail API를 통한 이메일 가져오기
+- [x] Attachment 인식 및 메타데이터 추출
+- [x] 중첩된 multipart 이메일 본문 추출
+- [x] MySQL 데이터베이스 스키마 (User, EmailAccount, Email)
+- [x] Alembic 마이그레이션 설정
+- [x] JWT 토큰 발급 및 검증
+- [x] Loguru 기반 로깅 시스템
+
+## 🚧 구현 중 / 예정
+
+- [ ] LangGraph AI Agent 파이프라인
+- [ ] 이메일 요약 (Summarization Node)
+- [ ] 중요도 분류 (Classification Node)
+- [ ] Vector Search 및 임베딩 저장
+- [ ] Rule Engine (자동 액션)
+- [ ] Naver IMAP 이메일 수집
+- [ ] S3/MinIO 원본 MIME 저장
+- [ ] MCP Server 구현
+
 ## 🧩 Roadmap
 
 - [ ] IMAP IDLE 기반 실시간 수신
 - [ ] OpenAI Realtime API 기반 inbox assist UI
 - [ ] Gmail/Naver 외 Outlook 지원
 - [ ] 자동 분류 모델 fine-tuning
-- [ ] 사용자별 규칙 엔진
+- [ ] 사용자별 규칙 엔진 커스터마이징
+
+## 📚 문서
+
+- [데이터베이스 설정 가이드](docs/database_setup.md)
+- [Alembic 사용법](docs/alembic_usage.md)
+- [Google OAuth 설정](docs/google_oauth_setup.md)
+- [Gmail 계정 연결 가이드](docs/gmail_account_setup.md)
+- [Celery Beat 설정](docs/celery_beat_setup.md)
+- [이메일 가져오기 테스트](docs/test_email_fetch.md)
+- [이메일 처리 워크플로우](docs/email_processing_workflow.md)
+- [프론트엔드 Wireframes](docs/frontend_wireframes.md)
+- [보안 감사 보고서](docs/security_audit.md)
+- [데이터베이스 관계 설명](docs/database_relationships.md)
+- [OAuth 플로우 설명](docs/oauth_flow.md)
+- [서버 아키텍처](docs/server_architecture.md)
+- [실행 체크리스트](docs/execution_checklist.md)
 
 ## 📝 License
 

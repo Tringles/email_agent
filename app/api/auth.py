@@ -1,15 +1,16 @@
 """OAuth authentication endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
-from typing import Optional
 from loguru import logger
+from typing import Optional
+from sqlalchemy.orm import Session
+from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.models.user import User
 from app.db.session import get_db
-from app.services.auth_service import AuthService
 from app.core.config import settings
-from app.core.security import create_user_token
+from app.services.auth_service import AuthService
+from app.core.security import create_user_token, get_current_user
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -38,14 +39,14 @@ async def google_callback(
     try:
         auth_service = AuthService()
         user = await auth_service.handle_google_callback(code, db)
-        
+
         # Generate JWT token
         access_token = create_user_token(
             user_id=user.id,
             email=user.oauth_email,
             provider=user.oauth_provider
         )
-        
+
         return {
             "access_token": access_token,
             "token_type": "bearer",
@@ -87,7 +88,7 @@ async def naver_callback(
     try:
         auth_service = AuthService()
         user = await auth_service.handle_naver_callback(code, state, db)
-        
+
         return {
             "user_id": user.id,
             "email": user.oauth_email,
@@ -101,18 +102,19 @@ async def naver_callback(
 
 @router.get("/email-accounts/gmail/connect")
 async def connect_gmail_account(
-    user_id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Initiate Gmail account connection flow.
     Requests Gmail API access permissions.
+    Requires authentication.
     """
     try:
         from app.services.email_account_service import EmailAccountService
-        
+
         email_account_service = EmailAccountService()
-        auth_url = email_account_service.get_gmail_connect_url(user_id)
+        auth_url = email_account_service.get_gmail_connect_url(current_user.id)
         return RedirectResponse(url=auth_url)
     except Exception as e:
         logger.error(f"Gmail connect error: {e}")
@@ -131,13 +133,13 @@ async def gmail_account_callback(
     """
     try:
         from app.services.email_account_service import EmailAccountService
-        
+
         user_id = int(state)  # Extract user_id from state
         email_account_service = EmailAccountService()
         email_account = await email_account_service.handle_gmail_callback(
             code, user_id, db
         )
-        
+
         return {
             "email_account_id": email_account.id,
             "email": email_account.email_address,
@@ -146,4 +148,3 @@ async def gmail_account_callback(
     except Exception as e:
         logger.error(f"Gmail callback error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
-

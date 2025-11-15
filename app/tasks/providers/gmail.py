@@ -1,14 +1,19 @@
 """Gmail provider implementation using Gmail API."""
 
-from typing import List, Optional
+import base64
+import re
 from datetime import datetime
+from email.utils import parsedate_to_datetime
+from typing import List, Optional
+
+from googleapiclient.errors import HttpError
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from dateutil.parser import parse
 from loguru import logger
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-
-from app.tasks.providers.base import EmailProvider, EmailMessage
+from app.tasks.providers.base import EmailMessage, EmailProvider
 
 
 class GmailProvider(EmailProvider):
@@ -23,13 +28,36 @@ class GmailProvider(EmailProvider):
         """Connect to Gmail API."""
         try:
             # OAuth2 credentials from credentials dict
-            self.creds = Credentials.from_authorized_user_info(
-                self.credentials.get("token", {})
-            )
+            # Handle both formats: direct credentials dict or nested "token" key
+            creds_dict = self.credentials.copy()
+            if "token" in creds_dict and isinstance(creds_dict["token"], dict):
+                creds_dict = creds_dict["token"].copy()
+            
+            # Convert expiry datetime to ISO string if needed
+            # Credentials.from_authorized_user_info expects string or None
+            if "expiry" in creds_dict:
+                expiry = creds_dict["expiry"]
+                if isinstance(expiry, datetime):
+                    creds_dict["expiry"] = expiry.isoformat()
+                elif expiry is None:
+                    creds_dict["expiry"] = None
+                # If it's already a string, keep it as is
+            
+            # Create credentials object
+            self.creds = Credentials.from_authorized_user_info(creds_dict)
+            
+            # Refresh token if expired
+            if self.creds.expired and self.creds.refresh_token:
+                from google.auth.transport.requests import Request
+                self.creds.refresh(Request())
+            
             self.service = build("gmail", "v1", credentials=self.creds)
             return True
         except Exception as e:
             logger.error(f"Gmail connection error: {e}")
+            logger.exception(e)  # Full traceback for debugging
+            self.service = None
+            self.creds = None
             return False
     
     async def disconnect(self):
@@ -45,7 +73,14 @@ class GmailProvider(EmailProvider):
     ) -> List[EmailMessage]:
         """Fetch emails from Gmail."""
         if not self.service:
-            await self.connect()
+            connected = await self.connect()
+            if not connected:
+                logger.error("Failed to connect to Gmail API")
+                return []
+        
+        if not self.service:
+            logger.error("Gmail service is not available")
+            return []
         
         try:
             # Build query
@@ -105,9 +140,8 @@ class GmailProvider(EmailProvider):
                 (h["value"] for h in headers if h["name"] == "Date"), ""
             )
             
-            # Parse body
-            body = self._extract_body(payload)
-            html_body = self._extract_html_body(payload)
+            # Parse body and attachments
+            body, html_body, attachments = self._extract_body_and_attachments(payload, message_id)
             
             # Get raw MIME
             raw_message = (
@@ -126,6 +160,7 @@ class GmailProvider(EmailProvider):
                 body=body,
                 html_body=html_body,
                 date=self._parse_date(date_str),
+                attachments=attachments,
                 raw_mime=raw_mime,
             )
             
@@ -133,35 +168,131 @@ class GmailProvider(EmailProvider):
             logger.error(f"Gmail API error: {error}")
             return None
     
-    def _extract_body(self, payload: dict) -> str:
-        """Extract plain text body from payload."""
+    def _extract_body_and_attachments(
+        self, payload: dict, message_id: str
+    ) -> tuple[str, Optional[str], List[dict]]:
+        """
+        Extract plain text body, HTML body, and attachments from payload.
+        Handles nested multipart structures recursively.
+        
+        Returns:
+            Tuple of (body, html_body, attachments)
+        """
         body = ""
+        html_body = None
+        attachments = []
+        
+        mime_type = payload.get("mimeType", "")
+        
+        # Handle multipart messages (nested structure)
         if "parts" in payload:
             for part in payload["parts"]:
-                if part["mimeType"] == "text/plain":
-                    data = part["body"].get("data", "")
-                    import base64
-                    body = base64.urlsafe_b64decode(data).decode("utf-8")
-                    break
-        elif payload.get("mimeType") == "text/plain":
-            data = payload["body"].get("data", "")
-            import base64
-            body = base64.urlsafe_b64decode(data).decode("utf-8")
-        return body
+                part_mime = part.get("mimeType", "")
+                part_body = part.get("body", {})
+                
+                # Check if this part is an attachment
+                headers = part.get("headers", [])
+                content_disposition = next(
+                    (h["value"] for h in headers if h["name"].lower() == "content-disposition"),
+                    ""
+                )
+                
+                # Check for attachment
+                if "attachment" in content_disposition.lower() or (
+                    part_body.get("attachmentId") and part_mime not in ["text/plain", "text/html"]
+                ):
+                    # Extract attachment info
+                    filename = self._extract_filename(headers, part.get("filename", ""))
+                    attachment_id = part_body.get("attachmentId")
+                    
+                    if attachment_id:
+                        attachments.append({
+                            "attachment_id": attachment_id,
+                            "filename": filename,
+                            "mime_type": part_mime,
+                            "size": part_body.get("size", 0),
+                        })
+                    continue
+                
+                # Recursively process nested multipart
+                if part_mime.startswith("multipart/"):
+                    nested_body, nested_html, nested_attachments = self._extract_body_and_attachments(
+                        part, message_id
+                    )
+                    if nested_body and not body:
+                        body = nested_body
+                    if nested_html and not html_body:
+                        html_body = nested_html
+                    attachments.extend(nested_attachments)
+                
+                # Extract text/plain
+                elif part_mime == "text/plain":
+                    data = part_body.get("data", "")
+                    if data and not body:
+                        import base64
+                        try:
+                            body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                        except Exception as e:
+                            logger.warning(f"Failed to decode text/plain body: {e}")
+                
+                # Extract text/html
+                elif part_mime == "text/html":
+                    data = part_body.get("data", "")
+                    if data and not html_body:
+                        import base64
+                        try:
+                            html_body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                        except Exception as e:
+                            logger.warning(f"Failed to decode text/html body: {e}")
+        
+        # Handle simple (non-multipart) messages
+        elif mime_type == "text/plain":
+            data = payload.get("body", {}).get("data", "")
+            if data:
+                import base64
+                try:
+                    body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                except Exception as e:
+                    logger.warning(f"Failed to decode text/plain body: {e}")
+        
+        elif mime_type == "text/html":
+            data = payload.get("body", {}).get("data", "")
+            if data:
+                import base64
+                try:
+                    html_body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+                except Exception as e:
+                    logger.warning(f"Failed to decode text/html body: {e}")
+        
+        return body, html_body, attachments
     
-    def _extract_html_body(self, payload: dict) -> Optional[str]:
-        """Extract HTML body from payload."""
-        if "parts" in payload:
-            for part in payload["parts"]:
-                if part["mimeType"] == "text/html":
-                    data = part["body"].get("data", "")
-                    import base64
-                    return base64.urlsafe_b64decode(data).decode("utf-8")
-        elif payload.get("mimeType") == "text/html":
-            data = payload["body"].get("data", "")
-            import base64
-            return base64.urlsafe_b64decode(data).decode("utf-8")
-        return None
+    def _extract_filename(self, headers: List[dict], default: str = "") -> str:
+        """Extract filename from headers."""
+        # Try Content-Disposition header first
+        content_disposition = next(
+            (h["value"] for h in headers if h["name"].lower() == "content-disposition"),
+            ""
+        )
+        
+        if "filename=" in content_disposition:
+            import re
+            match = re.search(r'filename[*]?=["\']?([^"\';]+)', content_disposition)
+            if match:
+                return match.group(1).strip()
+        
+        # Try Content-Type header
+        content_type = next(
+            (h["value"] for h in headers if h["name"].lower() == "content-type"),
+            ""
+        )
+        
+        if "name=" in content_type:
+            import re
+            match = re.search(r'name=["\']?([^"\';]+)', content_type)
+            if match:
+                return match.group(1).strip()
+        
+        return default
     
     def _parse_date(self, date_str: str) -> Optional[datetime]:
         """Parse email date string."""

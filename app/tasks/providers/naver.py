@@ -1,13 +1,14 @@
 """Naver email provider implementation using IMAP."""
 
-import imaplib
 import email
-from typing import List, Optional
+import imaplib
 from datetime import datetime
 from email.header import decode_header
+from typing import List, Optional
+
 from loguru import logger
 
-from app.tasks.providers.base import EmailProvider, EmailMessage
+from app.tasks.providers.base import EmailMessage, EmailProvider
 
 
 class NaverProvider(EmailProvider):

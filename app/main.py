@@ -1,19 +1,20 @@
 """FastAPI application entry point."""
 
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api import auth, email, agent, health
+from app.api import agent, auth, email, health
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
-    logger.info(f"Starting {settings.PROJECT_NAME} in {settings.ENVIRONMENT} mode")
+    logger.info(
+        f"Starting {settings.PROJECT_NAME} in {settings.ENVIRONMENT} mode")
     logger.info(f"Debug mode: {settings.DEBUG}")
     yield
     # Shutdown
@@ -32,7 +33,8 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.DEBUG else [],  # Configure properly in production
+    # Configure properly in production
+    allow_origins=["*"] if settings.DEBUG else [],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
