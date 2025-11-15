@@ -26,7 +26,8 @@ project-root/
 │   │   ├── config.py
 │   │   ├── logging.py
 │   │   ├── celery_app.py
-│   │   └── security.py
+│   │   ├── security.py
+│   │   └── id_encryption.py
 │   ├── models/
 │   │   ├── user.py
 │   │   ├── email_account.py
@@ -45,6 +46,7 @@ project-root/
 │   │   ├── session.py
 │   │   └── repositories/
 │   │       ├── email_repo.py
+│   │       ├── email_account_repo.py
 │   │       └── user_repo.py
 │   ├── langgraph/
 │   │   ├── graph.py
@@ -70,6 +72,7 @@ project-root/
 │   │           └── factory.py
 │   ├── tasks/
 │   │   ├── email_tasks.py
+│   │   ├── utils.py
 │   │   └── providers/
 │   │       ├── base.py
 │   │       ├── gmail.py
@@ -93,6 +96,7 @@ project-root/
 │   ├── execution_checklist.md
 │   ├── gmail_account_setup.md
 │   ├── google_oauth_setup.md
+│   ├── idor_protection.md
 │   ├── oauth_flow.md
 │   ├── security_audit.md
 │   ├── server_architecture.md
@@ -180,10 +184,11 @@ flowchart TB
 ### 🔄 Email Aggregation
 
 - **Gmail API** (OAuth + Gmail SDK) ✅ 구현 완료
-- **Naver IMAP** (IDLE or polling) 🚧 구현 중
+- **Naver IMAP** (IMAP credentials) ✅ 구현 완료
 - **Celery Scheduled Tasks**: Background에서 주기적으로 이메일 수집 (기본 5분마다) ✅ 구현 완료
 - 다중 메일 계정 → 단일 inbox로 수집 ✅ 구현 완료
 - Attachment 인식 및 메타데이터 추출 ✅ 구현 완료
+- RFC 2047 인코딩 디코딩 (이메일 헤더) ✅ 구현 완료
 - MySQL에 메타데이터 저장 ✅ 구현 완료
 - MIME → S3/MinIO 저장 🚧 구현 예정
 
@@ -213,11 +218,18 @@ flowchart TB
 - `/api/v1/auth/naver/login`: Naver 로그인 🚧 구현 예정
 - `/api/v1/auth/email-accounts/gmail/connect`: Gmail 계정 연결
 - `/api/v1/auth/email-accounts/gmail/callback`: Gmail 계정 연결 콜백
+- `/api/v1/auth/email-accounts/naver/connect`: Naver 계정 연결 (IMAP) ✅ 구현 완료
+- `/api/v1/auth/email-accounts`: 연결된 계정 목록 조회 ✅ 구현 완료
 
-**이메일 API:** 🚧 기본 구조만 구현
-- `/api/v1/email/{id}`: 이메일 조회
-- `/api/v1/email/ingest`: 수신 트리거
-- `/api/v1/email/{id}/summary`: 요약 조회
+**이메일 API:** ✅ 구현 완료
+- `GET /api/v1/email`: 이메일 목록 조회 (페이지네이션, 필터링)
+- `GET /api/v1/email/{encrypted_id}`: 이메일 상세 조회
+- `PATCH /api/v1/email/{encrypted_id}/read`: 읽음 처리
+- `PATCH /api/v1/email/{encrypted_id}/important`: 중요 표시
+- `PATCH /api/v1/email/{encrypted_id}/archive`: 아카이브
+- `DELETE /api/v1/email/{encrypted_id}`: 삭제
+- `POST /api/v1/email/ingest`: 수동 동기화 트리거
+- `GET /api/v1/email/{encrypted_id}/summary`: 요약 조회
 
 **Agent API:** 🚧 구현 예정
 - `/api/v1/agent/run`: LangGraph 파이프라인 실행
@@ -364,8 +376,13 @@ OPENAI_API_KEY=
 # Email Providers
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-NAVER_IMAP_USER=
-NAVER_IMAP_PASSWORD=
+GOOGLE_REDIRECT_URI=http://localhost:8000/api/v1/auth/google/callback
+GMAIL_REDIRECT_URI=http://localhost:8000/api/v1/auth/email-accounts/gmail/callback
+
+# Security
+JWT_SECRET_KEY=your-secret-key-change-in-production
+ID_ENCRYPTION_KEY=  # Optional: Generate with 'make generate-id-key'
+FRONTEND_URL=http://localhost:3000
 ```
 
 ### 3. DB 초기화
@@ -441,14 +458,20 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 
 - [x] Google SSO 로그인 (OAuth 2.0)
 - [x] Gmail 계정 연결 및 OAuth 토큰 관리
+- [x] Naver 계정 연결 (IMAP credentials)
 - [x] Celery를 통한 백그라운드 이메일 수집
 - [x] Gmail API를 통한 이메일 가져오기
+- [x] Naver IMAP을 통한 이메일 가져오기
 - [x] Attachment 인식 및 메타데이터 추출
 - [x] 중첩된 multipart 이메일 본문 추출
+- [x] RFC 2047 인코딩 디코딩 (이메일 헤더)
 - [x] MySQL 데이터베이스 스키마 (User, EmailAccount, Email)
 - [x] Alembic 마이그레이션 설정
 - [x] JWT 토큰 발급 및 검증
 - [x] Loguru 기반 로깅 시스템
+- [x] ID 암호화를 통한 IDOR 공격 방지
+- [x] 이메일 API 엔드포인트 (목록, 상세, 액션)
+- [x] 계정 관리 API (연결, 목록 조회)
 
 ## 🚧 구현 중 / 예정
 
@@ -457,9 +480,9 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [ ] 중요도 분류 (Classification Node)
 - [ ] Vector Search 및 임베딩 저장
 - [ ] Rule Engine (자동 액션)
-- [ ] Naver IMAP 이메일 수집
 - [ ] S3/MinIO 원본 MIME 저장
 - [ ] MCP Server 구현
+- [ ] Naver OAuth 로그인 (현재는 IMAP만 지원)
 
 ## 🧩 Roadmap
 
@@ -480,6 +503,7 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [이메일 처리 워크플로우](docs/email_processing_workflow.md)
 - [프론트엔드 Wireframes](docs/frontend_wireframes.md)
 - [보안 감사 보고서](docs/security_audit.md)
+- [IDOR 보호 (ID 암호화)](docs/idor_protection.md)
 - [데이터베이스 관계 설명](docs/database_relationships.md)
 - [OAuth 플로우 설명](docs/oauth_flow.md)
 - [서버 아키텍처](docs/server_architecture.md)
