@@ -3,13 +3,16 @@
 from loguru import logger
 from typing import Optional
 from sqlalchemy.orm import Session
+from fastapi.responses import StreamingResponse
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.models.user import User
 from app.db.session import get_db
 from app.core.security import get_current_user
+from app.tasks.providers.factory import get_email_provider
 from app.db.repositories.email_repo import EmailRepository
 from app.tasks.email_tasks import fetch_emails_for_account
+from app.services.storage_service import get_storage_service
 from app.db.repositories.email_account_repo import EmailAccountRepository
 from app.core.id_encryption import encrypt_email_id, decrypt_email_id, encrypt_account_id, decrypt_account_id
 
@@ -133,6 +136,10 @@ async def get_email(
 
         if not email:
             raise HTTPException(status_code=404, detail="Email not found")
+
+        # Mark email as read when viewing
+        if not email.is_read:
+            email_repo.mark_as_read(email_id, current_user.id, read=True)
 
         # Convert Email model to dict
         # Get provider_type from email_account relationship
@@ -285,8 +292,11 @@ async def delete_email(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Delete email (soft delete)."""
-    try:
+    """
+    Delete email from provider and soft delete in database.
+    Raw MIME files in storage are preserved.
+    """
+    try:        
         # Decrypt email ID
         try:
             email_id = decrypt_email_id(encrypted_email_id)
@@ -295,6 +305,39 @@ async def delete_email(
             raise HTTPException(status_code=400, detail="Invalid email ID")
 
         email_repo = EmailRepository(db)
+        email = email_repo.get_email_by_id(email_id, current_user.id)
+        
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        # Delete email from provider (Gmail/Naver)
+        try:
+            account_repo = EmailAccountRepository(db)
+            account = account_repo.get_account_by_id(email.email_account_id)
+            
+            if account and account.is_active:
+                provider = get_email_provider(
+                    account.provider_type.value,
+                    account.credentials
+                )
+                
+                # Connect and delete from provider
+                connected = await provider.connect()
+                if connected:
+                    deleted = await provider.delete_email(email.provider_message_id)
+                    await provider.disconnect()
+                    
+                    if deleted:
+                        logger.info(f"Deleted email {email_id} from {account.provider_type.value}")
+                    else:
+                        logger.warning(f"Failed to delete email {email_id} from {account.provider_type.value}")
+                else:
+                    logger.warning(f"Failed to connect to {account.provider_type.value} for deletion")
+        except Exception as provider_error:
+            # Log error but continue with soft delete
+            logger.warning(f"Error deleting email from provider: {provider_error}")
+
+        # Soft delete email in database
         deleted = email_repo.delete_email(email_id, current_user.id)
 
         if not deleted:
@@ -379,8 +422,33 @@ async def trigger_email_ingest(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error triggering email ingest: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_str = str(e).lower()
+        error_module = type(e).__module__
+        
+        # Check if it's a Redis/Celery broker connection error
+        is_redis_error = (
+            'kombu' in error_module or
+            'kombu' in error_str or
+            'redis' in error_str or
+            'celery' in error_str or
+            'amqp' in error_module
+        )
+        
+        if 'connection refused' in error_str and is_redis_error:
+            logger.error(f"Redis/Celery broker connection failed: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="Redis/Celery broker is not available. Please ensure Redis is running."
+            )
+        elif 'connection refused' in error_str:
+            logger.error(f"Connection refused error: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Service unavailable: {str(e)}"
+            )
+        else:
+            logger.error(f"Error triggering email ingest: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{encrypted_email_id}/summary")
@@ -412,4 +480,88 @@ async def get_email_summary(
         raise
     except Exception as e:
         logger.error(f"Error fetching email summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{encrypted_email_id}/attachments/{attachment_index}")
+async def download_attachment(
+    encrypted_email_id: str,
+    attachment_index: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Download an attachment file for an email.
+    
+    Args:
+        encrypted_email_id: Encrypted email ID
+        attachment_index: Index of the attachment (0-based)
+    """
+    try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
+        email_repo = EmailRepository(db)
+        email = email_repo.get_email_by_id(email_id, current_user.id)
+
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+
+        if not email.has_attachments or not email.attachments:
+            raise HTTPException(status_code=404, detail="Email has no attachments")
+
+        # Validate attachment index
+        if attachment_index < 0 or attachment_index >= len(email.attachments):
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        attachment = email.attachments[attachment_index]
+        filename = attachment.get("filename", f"attachment_{attachment_index}")
+        storage_path = attachment.get("storage_path")
+
+        # If storage_path is not available, try to construct it
+        if not storage_path:
+            # Fallback: construct path from email metadata
+            logger.warning(f"Attachment {attachment_index} for email {email_id} has no storage_path, attempting to construct path")
+            # This should not happen if email was fetched correctly, but handle gracefully
+            raise HTTPException(
+                status_code=404,
+                detail="Attachment file not found in storage"
+            )
+
+        # Get storage service and download attachment
+        storage = get_storage_service()
+        
+        # Extract index from storage_path or use attachment_index
+        # Storage path format: users/{user_id}/emails/{email_id}/attachments/{index}_{filename}
+        attachment_data = storage.get_attachment(
+            user_id=current_user.id,
+            email_id=email_id,
+            index=attachment_index,
+            filename=filename
+        )
+
+        if not attachment_data:
+            raise HTTPException(status_code=404, detail="Attachment file not found in storage")
+
+        # Get content type from attachment metadata
+        content_type = attachment.get("mime_type", "application/octet-stream")
+
+        # Return file as streaming response
+        return StreamingResponse(
+            iter([attachment_data]),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(attachment_data))
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading attachment {attachment_index} for email {email_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
