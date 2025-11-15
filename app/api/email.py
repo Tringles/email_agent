@@ -9,6 +9,9 @@ from app.models.user import User
 from app.db.session import get_db
 from app.core.security import get_current_user
 from app.db.repositories.email_repo import EmailRepository
+from app.tasks.email_tasks import fetch_emails_for_account
+from app.db.repositories.email_account_repo import EmailAccountRepository
+from app.core.id_encryption import encrypt_email_id, decrypt_email_id, encrypt_account_id, decrypt_account_id
 
 router = APIRouter(prefix="/api/v1/email", tags=["email"])
 
@@ -21,7 +24,7 @@ async def get_emails(
     is_read: Optional[bool] = Query(None),
     is_important: Optional[bool] = Query(None),
     search: Optional[str] = Query(None),
-    account_id: Optional[int] = Query(None),
+    account_id: Optional[str] = Query(None, description="Encrypted account ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -38,6 +41,15 @@ async def get_emails(
         account_id: Filter by email account ID
     """
     try:
+        # Decrypt account_id if provided
+        decrypted_account_id = None
+        if account_id:
+            try:
+                decrypted_account_id = decrypt_account_id(account_id)
+            except ValueError as e:
+                logger.warning(f"Invalid encrypted account_id: {e}")
+                raise HTTPException(status_code=400, detail="Invalid account ID")
+
         email_repo = EmailRepository(db)
         emails, total = email_repo.get_emails(
             user_id=current_user.id,
@@ -47,7 +59,7 @@ async def get_emails(
             is_read=is_read,
             is_important=is_important,
             search=search,
-            account_id=account_id,
+            account_id=decrypted_account_id,
         )
 
         # Calculate total pages
@@ -56,9 +68,12 @@ async def get_emails(
         # Convert Email models to dict
         items = []
         for email in emails:
+            # Get provider_type from email_account relationship
+            provider_type = email.email_account.provider_type.value if email.email_account else None
             items.append({
-                "id": email.id,
-                "email_account_id": email.email_account_id,
+                "id": encrypt_email_id(email.id),  # 암호화된 ID
+                "email_account_id": encrypt_account_id(email.email_account_id),  # 암호화된 ID
+                "provider_type": provider_type,
                 "subject": email.subject,
                 "sender": email.sender,
                 "sender_name": email.sender_name,
@@ -98,14 +113,21 @@ async def get_emails(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{email_id}")
+@router.get("/{encrypted_email_id}")
 async def get_email(
-    email_id: int,
+    encrypted_email_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get email by ID."""
+    """Get email by encrypted ID."""
     try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
         email_repo = EmailRepository(db)
         email = email_repo.get_email_by_id(email_id, current_user.id)
 
@@ -113,9 +135,12 @@ async def get_email(
             raise HTTPException(status_code=404, detail="Email not found")
 
         # Convert Email model to dict
+        # Get provider_type from email_account relationship
+        provider_type = email.email_account.provider_type.value if email.email_account else None
         return {
-            "id": email.id,
-            "email_account_id": email.email_account_id,
+            "id": encrypt_email_id(email.id),  # 암호화된 ID
+            "email_account_id": encrypt_account_id(email.email_account_id),  # 암호화된 ID
+            "provider_type": provider_type,
             "provider_message_id": email.provider_message_id,
             "provider_thread_id": email.provider_thread_id,
             "subject": email.subject,
@@ -160,19 +185,26 @@ async def get_email(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching email {email_id}: {e}")
+        logger.error(f"Error fetching email: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/{email_id}/read")
+@router.patch("/{encrypted_email_id}/read")
 async def mark_email_as_read(
-    email_id: int,
+    encrypted_email_id: str,
     read: bool = Query(True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Mark email as read/unread."""
     try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
         email_repo = EmailRepository(db)
         email = email_repo.mark_as_read(email_id, current_user.id, read)
 
@@ -183,19 +215,26 @@ async def mark_email_as_read(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error marking email {email_id} as read: {e}")
+        logger.error(f"Error marking email as read: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/{email_id}/important")
+@router.patch("/{encrypted_email_id}/important")
 async def mark_email_as_important(
-    email_id: int,
+    encrypted_email_id: str,
     important: bool = Query(True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Mark email as important/unimportant."""
     try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
         email_repo = EmailRepository(db)
         email = email_repo.mark_as_important(email_id, current_user.id, important)
 
@@ -210,15 +249,22 @@ async def mark_email_as_important(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.patch("/{email_id}/archive")
+@router.patch("/{encrypted_email_id}/archive")
 async def archive_email(
-    email_id: int,
+    encrypted_email_id: str,
     archived: bool = Query(True),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Archive/unarchive email."""
     try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
         email_repo = EmailRepository(db)
         email = email_repo.archive_email(email_id, current_user.id, archived)
 
@@ -229,18 +275,25 @@ async def archive_email(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error archiving email {email_id}: {e}")
+        logger.error(f"Error archiving email: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{email_id}")
+@router.delete("/{encrypted_email_id}")
 async def delete_email(
-    email_id: int,
+    encrypted_email_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Delete email (soft delete)."""
     try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
         email_repo = EmailRepository(db)
         deleted = email_repo.delete_email(email_id, current_user.id)
 
@@ -251,27 +304,100 @@ async def delete_email(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting email {email_id}: {e}")
+        logger.error(f"Error deleting email: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/ingest")
 async def trigger_email_ingest(
+    account_id: Optional[str] = Query(None, description="Encrypted account ID to sync (optional, syncs all if not provided)"),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Trigger email ingestion manually."""
-    # TODO: Implement manual ingestion trigger
-    return {"message": "Email ingestion triggered"}
+    """
+    Trigger email ingestion manually.
+    Syncs emails for all active accounts of the current user, or a specific account if account_id is provided.
+    """
+    try:
+        account_repo = EmailAccountRepository(db)
+        
+        if account_id:
+            # Decrypt account ID
+            try:
+                decrypted_account_id = decrypt_account_id(account_id)
+            except ValueError as e:
+                logger.warning(f"Invalid encrypted account_id: {e}")
+                raise HTTPException(status_code=400, detail="Invalid account ID")
+            
+            # Sync specific account
+            account = account_repo.get_account_by_id(decrypted_account_id)
+            if not account:
+                raise HTTPException(status_code=404, detail="Email account not found")
+            
+            # Verify account belongs to current user
+            if account.user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied to this account")
+            
+            if not account.is_active:
+                raise HTTPException(status_code=400, detail="Email account is not active")
+            
+            # Trigger Celery task (use decrypted account_id for internal task)
+            task_result = fetch_emails_for_account.delay(decrypted_account_id)
+            
+            return {
+                "message": "Email sync triggered",
+                "account_id": account_id,  # Return encrypted ID
+                "account_email": account.email_address,
+                "task_id": task_result.id,
+            }
+        else:
+            # Sync all active accounts for current user
+            accounts = account_repo.get_active_accounts(user_id=current_user.id)
+            
+            if not accounts:
+                return {
+                    "message": "No active email accounts found",
+                    "triggered_count": 0,
+                    "accounts": []
+                }
+            
+            triggered_accounts = []
+            for account in accounts:
+                # Trigger Celery task for each account (use decrypted account_id for internal task)
+                task_result = fetch_emails_for_account.delay(account.id)
+                triggered_accounts.append({
+                    "account_id": encrypt_account_id(account.id),  # Return encrypted ID
+                    "account_email": account.email_address,
+                    "task_id": task_result.id,
+                })
+            
+            return {
+                "message": "Email sync triggered for all accounts",
+                "triggered_count": len(triggered_accounts),
+                "accounts": triggered_accounts,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering email ingest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{email_id}/summary")
+@router.get("/{encrypted_email_id}/summary")
 async def get_email_summary(
-    email_id: int,
+    encrypted_email_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Get email summary."""
     try:
+        # Decrypt email ID
+        try:
+            email_id = decrypt_email_id(encrypted_email_id)
+        except ValueError as e:
+            logger.warning(f"Invalid encrypted email_id: {e}")
+            raise HTTPException(status_code=400, detail="Invalid email ID")
+
         email_repo = EmailRepository(db)
         email = email_repo.get_email_by_id(email_id, current_user.id)
 
@@ -279,11 +405,11 @@ async def get_email_summary(
             raise HTTPException(status_code=404, detail="Email not found")
 
         return {
-            "email_id": email_id,
+            "email_id": encrypted_email_id,  # Return encrypted ID
             "summary": email.summary or None,
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching email summary {email_id}: {e}")
+        logger.error(f"Error fetching email summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
