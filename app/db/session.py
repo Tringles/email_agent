@@ -1,9 +1,9 @@
 """SQLAlchemy database session and base model."""
 
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
 from typing import Generator
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.declarative import declarative_base
 
 from app.core.config import settings
 
@@ -28,7 +28,7 @@ Base = declarative_base()
 def get_db() -> Generator[Session, None, None]:
     """
     Dependency for getting database session.
-    
+
     Usage in FastAPI:
         @app.get("/items/")
         def read_items(db: Session = Depends(get_db)):
