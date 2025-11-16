@@ -52,6 +52,7 @@ class Settings(BaseSettings):
 
     # LLM
     OPENAI_API_KEY: Optional[str] = None
+    OPENAI_MODEL: str = "gpt-5-nano"  # 기본 모델 (gpt-5-nano 사용 시 환경 변수로 설정: OPENAI_MODEL=gpt-5-nano)
 
     # Email Providers
     GOOGLE_CLIENT_ID: Optional[str] = None
