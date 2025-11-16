@@ -139,15 +139,9 @@ class LLMService:
             HumanMessage(content=human_content)
         ]
         
-        # Input 로깅
-        logger.debug(f"[{operation_name}] LLM Input:\nSystem: {system_prompt}\n\nHuman: {human_content}")
-        
         # LLM 호출 (재시도 가능한 에러에 대해서만 재시도)
         try:
             llm = self.get_llm(**llm_kwargs)
-            model_name = getattr(llm, 'model_name', getattr(llm, 'model', 'unknown'))
-            logger.debug(f"[{operation_name}] LLM model: {model_name}")
-            logger.debug(f"[{operation_name}] LLM params: model={model_name}, temperature={getattr(llm, 'temperature', 'N/A')}, max_tokens={getattr(llm, 'max_tokens', 'N/A')}")
             
             # 재시도 가능한 에러에 대해서만 재시도
             max_retries = 2
@@ -176,53 +170,16 @@ class LLMService:
             logger.error(f"[{operation_name}] Error invoking LLM after retries: {e}", exc_info=True)
             raise
         
-        # Response 객체 상세 디버깅
-        logger.debug(f"[{operation_name}] Response type: {type(response)}")
-        logger.debug(f"[{operation_name}] Response is AIMessage: {isinstance(response, AIMessage)}")
-        logger.debug(f"[{operation_name}] Response dir (first 20): {[attr for attr in dir(response) if not attr.startswith('_')][:20]}")
-        
-        # response.content 확인
-        if hasattr(response, 'content'):
-            raw_content = response.content
-            logger.debug(f"[{operation_name}] response.content type: {type(raw_content)}")
-            logger.debug(f"[{operation_name}] response.content is None: {raw_content is None}")
-            if raw_content is not None:
-                if isinstance(raw_content, str):
-                    logger.debug(f"[{operation_name}] response.content (str) length: {len(raw_content)}")
-                    logger.debug(f"[{operation_name}] response.content (str) value (first 200 chars): {repr(raw_content[:200])}")
-                elif isinstance(raw_content, list):
-                    logger.debug(f"[{operation_name}] response.content (list) length: {len(raw_content)}")
-                    logger.debug(f"[{operation_name}] response.content (list) items types: {[type(item).__name__ for item in raw_content]}")
-                    for i, item in enumerate(raw_content):
-                        logger.debug(f"[{operation_name}] response.content[{i}]: type={type(item).__name__}, value={repr(str(item)[:100])}")
-                else:
-                    logger.debug(f"[{operation_name}] response.content (other) value: {repr(str(raw_content)[:200])}")
-        else:
-            logger.warning(f"[{operation_name}] Response has no 'content' attribute")
-            # 다른 속성 확인
-            for attr in ['text', 'message', 'response', 'output']:
-                if hasattr(response, attr):
-                    logger.debug(f"[{operation_name}] Response has '{attr}' attribute: {type(getattr(response, attr))}")
-                    logger.debug(f"[{operation_name}] Response.{attr} value: {repr(str(getattr(response, attr))[:200])}")
-        
-        # response_metadata 확인
-        if hasattr(response, 'response_metadata'):
-            logger.debug(f"[{operation_name}] response.response_metadata: {response.response_metadata}")
-        
         # Output 추출
         output_content = None
         if hasattr(response, 'content'):
             output_content = response.content
             if output_content is None:
-                logger.warning(f"[{operation_name}] response.content is None")
                 output_content = ""
             elif isinstance(output_content, str):
                 output_content = output_content.strip()
-                if not output_content:
-                    logger.warning(f"[{operation_name}] response.content is empty string after strip")
             elif isinstance(output_content, list):
                 # 멀티모달 콘텐츠인 경우 텍스트만 추출
-                logger.debug(f"[{operation_name}] Processing list content: {len(output_content)} items")
                 text_parts = []
                 for item in output_content:
                     if isinstance(item, str):
@@ -234,21 +191,13 @@ class LLMService:
                     else:
                         text_parts.append(str(item))
                 output_content = " ".join(text_parts).strip()
-                if not output_content:
-                    logger.warning(f"[{operation_name}] No text extracted from list content")
             else:
-                logger.warning(f"[{operation_name}] Unexpected content type: {type(output_content)}")
                 output_content = str(output_content).strip()
         elif hasattr(response, 'text'):
-            logger.debug(f"[{operation_name}] Using response.text instead of content")
             output_content = str(response.text).strip()
         else:
             logger.error(f"[{operation_name}] Cannot extract content from response")
-            logger.error(f"[{operation_name}] Response object: {response}")
             output_content = ""
-        
-        logger.debug(f"[{operation_name}] Final LLM Output:\n{output_content}")
-        logger.debug(f"[{operation_name}] Final LLM Output length: {len(output_content) if output_content else 0}")
         
         # 토큰 사용량 로깅
         self._log_token_usage(response, operation_name)
