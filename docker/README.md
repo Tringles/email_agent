@@ -1,172 +1,166 @@
-# Docker Compose 설정
+# Docker 빌드 가이드
 
-이 디렉토리에는 Email AI Aggregator 프로젝트의 Docker Compose 설정이 포함되어 있습니다.
+이 디렉토리에는 Email AI Aggregator 프로젝트의 Docker 이미지 빌드를 위한 파일들이 포함되어 있습니다.
 
-## 서비스 구성
+## Dockerfile 개요
 
-- **app**: FastAPI 백엔드 서버
-- **celery-worker**: Celery 워커 (이메일 수집 작업)
-- **celery-beat**: Celery Beat (스케줄링)
-- **mysql**: MySQL 데이터베이스
-- **redis**: Redis (Celery broker 및 결과 저장)
-- **minio**: MinIO 오브젝트 스토리지
-- **qdrant**: Qdrant 벡터 데이터베이스
+### 주요 개선사항
 
-## 사용 방법
+1. **멀티 스테이지 빌드**: 빌드 의존성과 런타임을 분리하여 이미지 크기 최적화
+2. **Non-root 사용자**: 보안을 위해 `appuser` 사용자로 실행
+3. **레이블 추가**: OCI 표준 레이블로 이미지 메타데이터 관리
+4. **Health check**: Kubernetes와 호환되는 헬스체크 설정
+5. **프로덕션 최적화**: Uvicorn workers, Celery concurrency 등 최적화
 
-### 1. 환경 변수 설정
+### Dockerfile 종류
 
-프로젝트 루트에 `.env` 파일 생성 (`.env.example` 참고):
+- **Dockerfile.app**: FastAPI 애플리케이션
+- **Dockerfile.worker**: Celery Worker
+- **Dockerfile.beat**: Celery Beat 스케줄러
+- **Dockerfile.base**: 공통 베이스 이미지 (선택사항)
 
-```bash
-# docker/.env.example을 프로젝트 루트로 복사
-cp docker/.env.example ../.env
-```
+## 빌드 방법
 
-또는 직접 `.env` 파일 생성:
-
-```env
-# Environment
-ENVIRONMENT=dev
-DEBUG=true
-
-# Database - MySQL
-DB_HOST=localhost
-DB_PORT=3306
-DB_USER=email_agent
-DB_PASSWORD=email_agent_password
-DB_NAME=email_agent
-
-# Celery
-CELERY_BROKER_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/0
-
-# MinIO
-MINIO_ENDPOINT=http://localhost:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin123
-
-# API URLs
-API_BASE_URL=http://localhost:8000
-FRONTEND_URL=http://localhost:3000
-
-# JWT
-JWT_SECRET_KEY=your-jwt-secret-key
-ID_ENCRYPTION_KEY=your-encryption-key
-
-# OAuth
-GOOGLE_CLIENT_ID=your-google-client-id
-GOOGLE_CLIENT_SECRET=your-google-client-secret
-
-# LLM
-OPENAI_API_KEY=your-openai-api-key
-```
-
-**중요**: Docker Compose는 프로젝트 루트의 `.env` 파일을 자동으로 읽어서 `${VARIABLE_NAME}` 형태로 참조할 수 있습니다.
-
-### 2. Docker Compose 실행
+### 방법 1: 빌드 스크립트 사용 (권장)
 
 ```bash
-# 모든 서비스 시작
-cd docker
-docker-compose up -d
+# 기본 빌드 (로컬)
+./docker/docker-build.sh
 
-# 로그 확인
-docker-compose logs -f
+# 레지스트리 지정
+./docker/docker-build.sh -r docker.io/your-username
 
-# 특정 서비스만 시작
-docker-compose up -d mysql redis minio qdrant
-docker-compose up -d app celery-worker celery-beat
+# 버전 태그 지정
+./docker/docker-build.sh -r docker.io/your-username -v v1.0.0
+
+# 도움말
+./docker/docker-build.sh --help
 ```
 
-### 3. 데이터베이스 마이그레이션
+### 방법 2: 직접 빌드
 
 ```bash
-# Alembic 마이그레이션 실행
-docker-compose exec app alembic upgrade head
+# App 이미지
+docker build -f docker/Dockerfile.app \
+  --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+  --build-arg VCS_REF=$(git rev-parse --short HEAD) \
+  --build-arg VERSION=latest \
+  -t email-agent:latest .
+
+# Worker 이미지
+docker build -f docker/Dockerfile.worker \
+  --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+  --build-arg VCS_REF=$(git rev-parse --short HEAD) \
+  --build-arg VERSION=latest \
+  -t email-agent-worker:latest .
+
+# Beat 이미지
+docker build -f docker/Dockerfile.beat \
+  --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+  --build-arg VCS_REF=$(git rev-parse --short HEAD) \
+  --build-arg VERSION=latest \
+  -t email-agent-beat:latest .
 ```
 
-### 4. MinIO 버킷 생성
-
-1. 브라우저에서 `http://localhost:9001` 접속
-2. 로그인: `minioadmin` / `minioadmin123`
-3. 버킷 생성: `email-mime`
-
-### 5. 서비스 접속 정보
-
-- **FastAPI**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
-- **MinIO Console**: http://localhost:9001
-- **Qdrant Dashboard**: http://localhost:6333/dashboard
-- **MySQL**: localhost:3306
-- **Redis**: localhost:6379
-
-## 개발 모드
-
-개발 중에는 코드 변경사항이 자동으로 반영되도록 볼륨 마운트를 사용합니다.
+## 이미지 푸시
 
 ```bash
-# 개발 모드로 실행 (코드 변경 시 자동 재시작)
-docker-compose up
+# 레지스트리에 로그인
+docker login your-registry.com
+
+# 이미지 태그 지정
+docker tag email-agent:latest your-registry.com/email-agent:v1.0.0
+docker tag email-agent-worker:latest your-registry.com/email-agent-worker:v1.0.0
+docker tag email-agent-beat:latest your-registry.com/email-agent-beat:v1.0.0
+
+# 푸시
+docker push your-registry.com/email-agent:v1.0.0
+docker push your-registry.com/email-agent-worker:v1.0.0
+docker push your-registry.com/email-agent-beat:v1.0.0
 ```
 
-## 프로덕션 배포
+## 이미지 최적화 팁
 
-프로덕션 환경에서는:
+### 1. 빌드 캐시 활용
 
-1. 환경 변수 설정 확인
-2. 보안 강화 (강력한 비밀번호, SSL 등)
-3. 리소스 제한 설정
-4. 로그 관리 설정
+`.dockerignore` 파일을 사용하여 불필요한 파일을 제외하면 빌드 속도가 향상됩니다.
+
+### 2. 레이어 최적화
+
+- `requirements.txt`를 먼저 복사하여 의존성 변경 시에만 재빌드
+- 애플리케이션 코드는 마지막에 복사
+
+### 3. 멀티 스테이지 빌드
+
+빌드 도구(gcc, g++ 등)는 빌드 스테이지에만 포함되고 최종 이미지에는 포함되지 않습니다.
+
+## 보안 고려사항
+
+1. **Non-root 사용자**: 모든 컨테이너는 `appuser` 사용자로 실행됩니다.
+2. **최소 권한**: 필요한 패키지만 설치합니다.
+3. **의존성 업데이트**: 정기적으로 베이스 이미지와 패키지를 업데이트하세요.
+
+## 프로덕션 설정
+
+### Uvicorn Workers
+
+`Dockerfile.app`에서 기본적으로 4개의 worker를 사용합니다. 리소스에 따라 조정하세요:
+
+```dockerfile
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+```
+
+### Celery Concurrency
+
+`Dockerfile.worker`에서 기본적으로 4개의 동시 작업을 처리합니다:
+
+```dockerfile
+CMD ["celery", "-A", "app.workers.email_worker", "worker", "--concurrency=4"]
+```
+
+## Health Check
+
+모든 이미지는 헬스체크를 포함합니다:
+
+- **App**: `http://localhost:8000/api/v1/health`
+- **Worker/Beat**: Celery 자체 헬스체크 메커니즘 사용
+
+## 트러블슈팅
+
+### 빌드 실패: MySQL 클라이언트 라이브러리
 
 ```bash
-# 프로덕션 모드
-ENVIRONMENT=prod DEBUG=false docker-compose up -d
+# 시스템 패키지 업데이트
+apt-get update && apt-get install -y default-libmysqlclient-dev
 ```
 
-## 문제 해결
+### 이미지 크기가 큰 경우
 
-### 서비스가 시작되지 않는 경우
+- 멀티 스테이지 빌드 사용 확인
+- `.dockerignore` 파일 확인
+- 불필요한 패키지 제거
 
-```bash
-# 로그 확인
-docker-compose logs [service-name]
+### 권한 오류
 
-# 서비스 상태 확인
-docker-compose ps
+- Non-root 사용자로 실행되므로 파일 권한 확인
+- 로그 디렉토리 권한 확인
 
-# 서비스 재시작
-docker-compose restart [service-name]
+## CI/CD 통합
+
+### GitHub Actions 예시
+
+```yaml
+- name: Build and push Docker images
+  run: |
+    ./docker/docker-build.sh \
+      -r ghcr.io/${{ github.repository_owner }} \
+      -v ${{ github.sha }}
 ```
 
-### 데이터베이스 연결 오류
+### GitLab CI 예시
 
-```bash
-# MySQL 컨테이너 상태 확인
-docker-compose exec mysql mysqladmin ping -h localhost -u root -prootpassword
-
-# 데이터베이스 생성 확인
-docker-compose exec mysql mysql -u root -prootpassword -e "SHOW DATABASES;"
+```yaml
+build:
+  script:
+    - ./docker/docker-build.sh -r $CI_REGISTRY_IMAGE -v $CI_COMMIT_SHA
 ```
-
-### 볼륨 데이터 삭제
-
-```bash
-# 모든 볼륨 삭제 (주의: 데이터 손실)
-docker-compose down -v
-```
-
-## 빌드 및 푸시
-
-```bash
-# 이미지 빌드
-docker-compose build
-
-# 특정 서비스만 빌드
-docker-compose build app
-
-# 이미지 태그 및 푸시
-docker tag email_agent_app:latest your-registry/email_agent_app:latest
-docker push your-registry/email_agent_app:latest
-```
-

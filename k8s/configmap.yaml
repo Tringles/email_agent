@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: email-agent-config
+  namespace: email-agent
+data:
+  # Environment
+  ENVIRONMENT: "prod"
+  DEBUG: "false"
+  
+  # Database - MySQL (외부 서비스 사용 시 수정 필요)
+  DB_HOST: "mysql-service"
+  DB_PORT: "3306"
+  DB_USER: "email_agent"
+  DB_NAME: "email_agent"
+  DB_CHARSET: "utf8mb4"
+  
+  # Celery - Redis (외부 서비스 사용 시 수정 필요)
+  CELERY_BROKER_URL: "redis://redis-service:6379/0"
+  CELERY_RESULT_BACKEND: "redis://redis-service:6379/0"
+  
+  # Vector Database - Qdrant (외부 서비스 사용 시 수정 필요)
+  VECTOR_DB_URL: "http://qdrant-service:6333"
+  
+  # Storage - MinIO/S3 (외부 서비스 사용 시 수정 필요)
+  MINIO_ENDPOINT: "http://minio-service:9000"
+  MINIO_USE_SSL: "false"
+  
+  # API URLs (실제 도메인으로 수정 필요)
+  API_BASE_URL: "https://api.example.com"
+  FRONTEND_URL: "https://app.example.com"
+  API_V1_STR: "/api/v1"
+  PROJECT_NAME: "Email AI Aggregator"
+  
+  # JWT
+  JWT_ALGORITHM: "HS256"
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "10080"
+  
+  # LLM
+  OPENAI_MODEL: "gpt-5-nano"
+

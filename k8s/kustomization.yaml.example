@@ -1,0 +1,38 @@
+# Kustomize 예시 파일
+# 사용법: cp kustomization.yaml.example kustomization.yaml
+# 그 다음 kubectl apply -k k8s/
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: email-agent
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - deployment-app.yaml
+  - deployment-worker.yaml
+  - deployment-beat.yaml
+  - service-app.yaml
+  - ingress.yaml
+
+# 이미지 오버라이드 예시
+images:
+  - name: email-agent
+    newName: your-registry/email-agent
+    newTag: v1.0.0
+  - name: email-agent-worker
+    newName: your-registry/email-agent-worker
+    newTag: v1.0.0
+  - name: email-agent-beat
+    newName: your-registry/email-agent-beat
+    newTag: v1.0.0
+
+# 리소스 오버라이드 예시
+replicas:
+  - name: email-agent-app
+    count: 3
+  - name: email-agent-worker
+    count: 3
+

@@ -1,0 +1,27 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: email-agent-ingress
+  namespace: email-agent
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod  # cert-manager 사용 시
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  tls:
+  - hosts:
+    - api.example.com  # 실제 도메인으로 변경 필요
+    secretName: email-agent-tls
+  rules:
+  - host: api.example.com  # 실제 도메인으로 변경 필요
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: email-agent-app
+            port:
+              number: 80
+
