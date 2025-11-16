@@ -1,0 +1,8 @@
+# Secret files (민감한 정보 포함)
+secret.yaml
+*.secret.yaml
+
+# Local kustomize files
+kustomization.yaml
+kustomization.yml
+

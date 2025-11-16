@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-agent-beat
+  namespace: email-agent
+  labels:
+    app: email-agent
+    component: beat
+spec:
+  replicas: 1  # Celery Beat는 단일 인스턴스만 실행
+  selector:
+    matchLabels:
+      app: email-agent
+      component: beat
+  template:
+    metadata:
+      labels:
+        app: email-agent
+        component: beat
+    spec:
+      containers:
+      - name: beat
+        image: email-agent-beat:latest  # 실제 이미지로 변경 필요
+        imagePullPolicy: Always
+        envFrom:
+        - configMapRef:
+            name: email-agent-config
+        - secretRef:
+            name: email-agent-secrets
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: beat-logs
+          mountPath: /app/logs
+        - name: beat-schedule
+          mountPath: /app/celerybeat-schedule.db
+      volumes:
+      - name: beat-logs
+        emptyDir: {}
+      - name: beat-schedule
+        emptyDir: {}  # 실제 운영에서는 PersistentVolume 사용 권장
+      restartPolicy: Always
+

@@ -1,0 +1,91 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+dist
+build
+.eggs
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Docker
+docker-compose.yaml
+docker-compose.*.yaml
+Dockerfile*
+.dockerignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Kubernetes
+k8s/
+*.yaml
+*.yml
+!requirements.txt
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+celerybeat-schedule.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Build artifacts
+*.whl
+*.tar.gz
+
+# Scripts (optional - keep if needed in container)
+scripts/
+tests/
+
+# Alembic versions (keep migrations)
+# alembic/versions/
+

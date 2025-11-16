@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-agent-worker
+  namespace: email-agent
+  labels:
+    app: email-agent
+    component: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: email-agent
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: email-agent
+        component: worker
+    spec:
+      containers:
+      - name: worker
+        image: email-agent-worker:latest  # 실제 이미지로 변경 필요
+        imagePullPolicy: Always
+        envFrom:
+        - configMapRef:
+            name: email-agent-config
+        - secretRef:
+            name: email-agent-secrets
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: worker-logs
+          mountPath: /app/logs
+      volumes:
+      - name: worker-logs
+        emptyDir: {}
+      restartPolicy: Always
+
