@@ -49,6 +49,7 @@ class EmailRepository:
         status: Optional[str] = None,
         is_read: Optional[bool] = None,
         is_important: Optional[bool] = None,
+        is_deleted: Optional[bool] = None,
         search: Optional[str] = None,
         account_id: Optional[int] = None,
     ) -> Tuple[List[Email], int]:
@@ -70,15 +71,19 @@ class EmailRepository:
         """
         # Start with base query - join with EmailAccount to filter by user_id
         # Use joinedload to eager load email_account relationship
-        # Exclude deleted emails by default
         query = self.db.query(Email).options(
             joinedload(Email.email_account)
         ).join(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(
-            EmailAccount.user_id == user_id,
-            Email.is_deleted == False  # Exclude deleted emails
+            EmailAccount.user_id == user_id
         )
+        
+        # Filter by is_deleted (default: exclude deleted if not specified)
+        if is_deleted is None:
+            query = query.filter(Email.is_deleted == False)
+        else:
+            query = query.filter(Email.is_deleted == is_deleted)
 
         # Filter by account_id if provided
         if account_id:
@@ -122,25 +127,28 @@ class EmailRepository:
 
         return emails, total
 
-    def get_email_by_id(self, email_id: int, user_id: Optional[int] = None) -> Optional[Email]:
+    def get_email_by_id(self, email_id: int, user_id: Optional[int] = None, include_deleted: bool = False) -> Optional[Email]:
         """
         Get email by ID.
 
         Args:
             email_id: Email ID
             user_id: Optional user ID to verify ownership
+            include_deleted: Whether to include deleted emails (default: False)
 
         Returns:
             Email object or None
         """
         # Use joinedload to eager load email_account relationship
-        # Exclude deleted emails
         query = self.db.query(Email).options(
             joinedload(Email.email_account)
         ).filter(
-            Email.id == email_id,
-            Email.is_deleted == False  # Exclude deleted emails
+            Email.id == email_id
         )
+        
+        # Filter by is_deleted if include_deleted is False
+        if not include_deleted:
+            query = query.filter(Email.is_deleted == False)
 
         # If user_id provided, verify ownership
         if user_id:
