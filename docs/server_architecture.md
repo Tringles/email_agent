@@ -32,9 +32,9 @@ uvicorn app.main:app --reload
 - 백그라운드 작업 처리
 
 **실행:**
-```bash
-celery -A app.workers.email_worker worker --loglevel=info
-```
+   ```bash
+   celery -A app.workers.email_worker worker --loglevel=info
+   ```
 
 ### Celery Beat
 
@@ -43,9 +43,9 @@ celery -A app.workers.email_worker worker --loglevel=info
 - 주기적 AI 처리 (5분마다)
 
 **실행:**
-```bash
-celery -A app.workers.email_worker beat --loglevel=info
-```
+   ```bash
+   celery -A app.workers.email_worker beat --loglevel=info
+   ```
 
 ## 시스템 아키텍처 다이어그램
 
