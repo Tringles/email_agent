@@ -15,7 +15,7 @@ from app.schemas.user_rule_schema import (
     CreateRuleFromEmailRequest
 )
 from app.models.user import User
-from app.api.auth import get_current_user
+from app.core.security import get_current_user
 from app.core.id_encryption import decrypt_email_id
 from app.models.user_rule import RuleType, RuleAction
 

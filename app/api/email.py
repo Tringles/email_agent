@@ -147,7 +147,10 @@ async def get_email(
 
         # Convert Email model to dict
         # Get provider_type from email_account relationship
-        provider_type = email.email_account.provider_type.value if email.email_account else None
+        # Use getattr to safely access provider_type
+        provider_type = None
+        if email.email_account:
+            provider_type = email.email_account.provider_type.value if hasattr(email.email_account, 'provider_type') else None
         return {
             "id": encrypt_email_id(email.id),  # 암호화된 ID
             "email_account_id": encrypt_account_id(email.email_account_id),  # 암호화된 ID

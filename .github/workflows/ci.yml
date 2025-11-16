@@ -1,0 +1,144 @@
+name: CI Tests
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    env:
+      # Database (MySQL for services, but tests use SQLite)
+      DB_HOST: localhost
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: test_password
+      DB_NAME: test_email_agent
+      DB_CHARSET: utf8mb4
+      # Redis/Celery
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+      # Vector DB (Qdrant)
+      VECTOR_DB_URL: http://localhost:6333
+      VECTOR_DB_API_KEY: ""
+      # LLM
+      OPENAI_API_KEY: test_key
+      OPENAI_MODEL: gpt-4o-mini
+      # OAuth
+      GOOGLE_CLIENT_ID: test_client_id
+      GOOGLE_CLIENT_SECRET: test_client_secret
+      # API
+      API_BASE_URL: http://localhost:8000
+      API_V1_STR: /api/v1
+      # JWT
+      JWT_SECRET_KEY: test_secret_key_for_ci_12345678901234567890
+      JWT_ALGORITHM: HS256
+      # Environment
+      ENVIRONMENT: dev
+      DEBUG: "true"
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test_password
+          MYSQL_DATABASE: test_email_agent
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Verify environment variables
+        run: |
+          echo "Environment variables configured"
+          echo "DB_HOST: $DB_HOST"
+          echo "OPENAI_API_KEY: ${OPENAI_API_KEY:0:10}..."
+
+      - name: Install MySQL and Redis clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client redis-tools
+
+      - name: Wait for MySQL to be ready
+        run: |
+          for i in {1..30}; do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -ptest_password --silent 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            echo "Waiting for MySQL... ($i/30)"
+            sleep 2
+          done
+
+      - name: Wait for Redis to be ready
+        run: |
+          for i in {1..30}; do
+            if redis-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null | grep -q PONG; then
+              echo "Redis is ready"
+              break
+            fi
+            echo "Waiting for Redis... ($i/30)"
+            sleep 2
+          done
+
+      - name: Run all tests with coverage
+        run: |
+          pytest tests/ -v --tb=short --maxfail=5 --cov=app --cov-report=xml --cov-report=term-missing --cov-report=html
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          file: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
+
