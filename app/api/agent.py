@@ -231,12 +231,11 @@ async def get_processing_stats(
                 "pending": 0
             }
         
-        # 각 상태별 개수 조회
+        # 각 상태별 개수 조회 (삭제된 메일 포함)
         processed_count = db.query(Email).join(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(
             EmailAccount.user_id == current_user.id,
-            Email.is_deleted == False,
             Email.status == EmailStatus.PROCESSED
         ).count()
         
@@ -244,7 +243,6 @@ async def get_processing_stats(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(
             EmailAccount.user_id == current_user.id,
-            Email.is_deleted == False,
             Email.status == EmailStatus.PROCESSING
         ).count()
         
@@ -252,7 +250,6 @@ async def get_processing_stats(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(
             EmailAccount.user_id == current_user.id,
-            Email.is_deleted == False,
             Email.status == EmailStatus.PENDING
         ).count()
         
@@ -284,12 +281,11 @@ async def get_processing_emails(
         from app.models.email_account import EmailAccount
         from app.core.id_encryption import encrypt_email_id
         
-        # 처리 중인 이메일 조회
+        # 처리 중인 이메일 조회 (삭제된 메일 포함)
         emails = db.query(Email).join(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(
             EmailAccount.user_id == current_user.id,
-            Email.is_deleted == False,
             Email.status == EmailStatus.PROCESSING
         ).order_by(Email.email_date.desc()).limit(50).all()
         
@@ -327,12 +323,11 @@ async def get_pending_emails(
         from app.models.email_account import EmailAccount
         from app.core.id_encryption import encrypt_email_id
         
-        # 대기 중인 이메일 조회
+        # 대기 중인 이메일 조회 (삭제된 메일 포함)
         emails = db.query(Email).join(
             EmailAccount, Email.email_account_id == EmailAccount.id
         ).filter(
             EmailAccount.user_id == current_user.id,
-            Email.is_deleted == False,
             Email.status == EmailStatus.PENDING
         ).order_by(Email.email_date.desc()).limit(50).all()
         
