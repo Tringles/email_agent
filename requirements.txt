@@ -59,6 +59,7 @@ python-dateutil
 pytz
 python-jose[cryptography]  # JWT token handling
 nest-asyncio  # For running async code in sync context
+numpy  # For vector similarity calculations
 
 # Testing
 pytest

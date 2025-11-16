@@ -1,13 +1,16 @@
 """Save Results Node - Exit Node."""
 
+import asyncio
 from loguru import logger
 from typing import Dict, Any
 from datetime import datetime
 
+from app.db.session import SessionLocal
 from app.langgraph.state import EmailProcessingState
 from app.models.email import EmailStatus, ImportanceLevel
 from app.db.repositories.email_repo import EmailRepository
-from app.db.session import SessionLocal
+from app.db.repositories.email_account_repo import EmailAccountRepository
+from app.tasks.providers.factory import get_email_provider
 
 
 def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
@@ -246,9 +249,12 @@ def _apply_auto_action(email, state: EmailProcessingState, email_repo: EmailRepo
     
     try:
         if auto_action == "delete":
-            # 삭제는 실제로는 아카이브로 처리 (데이터 보존)
+            # Provider에서 실제 삭제 시도
+            _delete_email_from_provider(email, email_repo.db)
+            
+            # DB에서 soft delete
             email.is_deleted = True
-            logger.info(f"Auto-deleted email {email.id} (marked as deleted)")
+            logger.info(f"Auto-deleted email {email.id} (marked as deleted in DB)")
             
         elif auto_action == "archive":
             email.is_archived = True
@@ -271,3 +277,86 @@ def _apply_auto_action(email, state: EmailProcessingState, email_repo: EmailRepo
         
     except Exception as e:
         logger.error(f"Error applying auto action {auto_action} for email {email.id}: {e}")
+
+
+def _delete_email_from_provider(email, db):
+    """
+    Provider에서 이메일 실제 삭제
+    
+    Args:
+        email: Email 모델 인스턴스
+        db: Database session
+    """
+    try:
+        account_repo = EmailAccountRepository(db)
+        account = account_repo.get_account_by_id(email.email_account_id)
+        
+        if not account or not account.is_active:
+            logger.warning(
+                f"Email account {email.email_account_id} not found or inactive, "
+                f"skipping provider deletion for email {email.id}"
+            )
+            return
+        
+        if not email.provider_message_id:
+            logger.warning(
+                f"Email {email.id} has no provider_message_id, "
+                f"skipping provider deletion"
+            )
+            return
+        
+        # Provider 인스턴스 생성
+        provider = get_email_provider(
+            account.provider_type.value,
+            account.credentials
+        )
+        
+        # Async 함수를 동기 함수에서 호출
+        async def _async_delete():
+            try:
+                connected = await provider.connect()
+                if connected:
+                    deleted = await provider.delete_email(email.provider_message_id)
+                    await provider.disconnect()
+                    
+                    if deleted:
+                        logger.info(
+                            f"Deleted email {email.id} from {account.provider_type.value} "
+                            f"(provider_message_id: {email.provider_message_id})"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to delete email {email.id} from {account.provider_type.value}"
+                        )
+                else:
+                    logger.warning(
+                        f"Failed to connect to {account.provider_type.value} for deletion"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Error deleting email {email.id} from provider: {e}",
+                    exc_info=True
+                )
+        
+        # Async 함수 실행
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 이미 실행 중인 이벤트 루프가 있는 경우 (Celery 등)
+                # 새 스레드에서 실행
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, _async_delete)
+                    future.result()
+            else:
+                asyncio.run(_async_delete())
+        except RuntimeError:
+            # 이벤트 루프가 없는 경우
+            asyncio.run(_async_delete())
+            
+    except Exception as provider_error:
+        # Provider 삭제 실패해도 DB 삭제는 계속 진행
+        logger.warning(
+            f"Error deleting email {email.id} from provider: {provider_error}. "
+            f"Continuing with DB soft delete."
+        )

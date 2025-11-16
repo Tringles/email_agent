@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Body
 from pydantic import BaseModel
 
 from app.models.user import User
+from app.models.email import Email
+from app.models.email_account import EmailAccount
 from app.db.session import get_db
 from app.core.security import get_current_user
 from app.core.id_encryption import decrypt_email_id, encrypt_email_id
@@ -196,3 +198,151 @@ async def run_agent(
     
     # Redirect to new endpoint
     return await process_email(email_id=email_id, async_mode=False, db=db, current_user=current_user)
+
+
+@router.get("/stats")
+async def get_processing_stats(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    AI 처리 통계 조회
+    
+    Returns:
+        처리됨, 처리 중, 대기 중 이메일 개수
+    """
+    try:
+        from app.db.repositories.email_repo import EmailRepository
+        from app.models.email import EmailStatus
+        from app.models.email_account import EmailAccount
+        
+        email_repo = EmailRepository(db)
+        
+        # 사용자의 이메일 계정들 조회
+        from app.db.repositories.email_account_repo import EmailAccountRepository
+        account_repo = EmailAccountRepository(db)
+        user_accounts = account_repo.get_active_accounts(user_id=current_user.id)
+        account_ids = [acc.id for acc in user_accounts]
+        
+        if not account_ids:
+            return {
+                "processed": 0,
+                "processing": 0,
+                "pending": 0
+            }
+        
+        # 각 상태별 개수 조회 (삭제된 메일 포함)
+        processed_count = db.query(Email).join(
+            EmailAccount, Email.email_account_id == EmailAccount.id
+        ).filter(
+            EmailAccount.user_id == current_user.id,
+            Email.status == EmailStatus.PROCESSED
+        ).count()
+        
+        processing_count = db.query(Email).join(
+            EmailAccount, Email.email_account_id == EmailAccount.id
+        ).filter(
+            EmailAccount.user_id == current_user.id,
+            Email.status == EmailStatus.PROCESSING
+        ).count()
+        
+        pending_count = db.query(Email).join(
+            EmailAccount, Email.email_account_id == EmailAccount.id
+        ).filter(
+            EmailAccount.user_id == current_user.id,
+            Email.status == EmailStatus.PENDING
+        ).count()
+        
+        return {
+            "processed": processed_count,
+            "processing": processing_count,
+            "pending": pending_count
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting processing stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get processing stats: {str(e)}")
+
+
+@router.get("/processing")
+async def get_processing_emails(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    처리 중인 이메일 목록 조회
+    
+    Returns:
+        처리 중인 이메일 목록
+    """
+    try:
+        from app.db.repositories.email_repo import EmailRepository
+        from app.models.email import EmailStatus
+        from app.models.email_account import EmailAccount
+        from app.core.id_encryption import encrypt_email_id
+        
+        # 처리 중인 이메일 조회 (삭제된 메일 포함)
+        emails = db.query(Email).join(
+            EmailAccount, Email.email_account_id == EmailAccount.id
+        ).filter(
+            EmailAccount.user_id == current_user.id,
+            Email.status == EmailStatus.PROCESSING
+        ).order_by(Email.email_date.desc()).limit(50).all()
+        
+        result = []
+        for email in emails:
+            result.append({
+                "id": encrypt_email_id(email.id),
+                "subject": email.subject or "(제목 없음)",
+                "sender": email.sender,
+                "status": email.status.value,
+                "started_at": email.processed_at.isoformat() if email.processed_at else None,
+            })
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting processing emails: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get processing emails: {str(e)}")
+
+
+@router.get("/pending")
+async def get_pending_emails(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    대기 중인 이메일 목록 조회
+    
+    Returns:
+        대기 중인 이메일 목록
+    """
+    try:
+        from app.db.repositories.email_repo import EmailRepository
+        from app.models.email import EmailStatus
+        from app.models.email_account import EmailAccount
+        from app.core.id_encryption import encrypt_email_id
+        
+        # 대기 중인 이메일 조회 (삭제된 메일 포함)
+        emails = db.query(Email).join(
+            EmailAccount, Email.email_account_id == EmailAccount.id
+        ).filter(
+            EmailAccount.user_id == current_user.id,
+            Email.status == EmailStatus.PENDING
+        ).order_by(Email.email_date.desc()).limit(50).all()
+        
+        result = []
+        for email in emails:
+            result.append({
+                "id": encrypt_email_id(email.id),
+                "subject": email.subject or "(제목 없음)",
+                "sender": email.sender,
+                "status": email.status.value,
+                "started_at": email.email_date.isoformat() if email.email_date else None,
+            })
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error getting pending emails: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get pending emails: {str(e)}")

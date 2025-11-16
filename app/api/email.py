@@ -26,6 +26,7 @@ async def get_emails(
     status: Optional[str] = Query(None),
     is_read: Optional[bool] = Query(None),
     is_important: Optional[bool] = Query(None),
+    is_deleted: Optional[bool] = Query(None, description="Filter by deleted status (True for deleted, False for not deleted)"),
     search: Optional[str] = Query(None),
     account_id: Optional[str] = Query(None, description="Encrypted account ID"),
     db: Session = Depends(get_db),
@@ -61,6 +62,7 @@ async def get_emails(
             status=status,
             is_read=is_read,
             is_important=is_important,
+            is_deleted=is_deleted,
             search=search,
             account_id=decrypted_account_id,
         )
@@ -93,6 +95,7 @@ async def get_emails(
                 "is_archived": email.is_archived,
                 "is_deleted": email.is_deleted,
                 "is_processed": email.is_processed,
+                "vector_db_id": email.vector_db_id,
                 "has_attachments": email.has_attachments,
                 "attachment_count": email.attachment_count,
                 "attachments": email.attachments or [],
@@ -119,6 +122,7 @@ async def get_emails(
 @router.get("/{encrypted_email_id}")
 async def get_email(
     encrypted_email_id: str,
+    include_deleted: bool = Query(False, description="Include deleted emails"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -132,13 +136,13 @@ async def get_email(
             raise HTTPException(status_code=400, detail="Invalid email ID")
 
         email_repo = EmailRepository(db)
-        email = email_repo.get_email_by_id(email_id, current_user.id)
+        email = email_repo.get_email_by_id(email_id, current_user.id, include_deleted=include_deleted)
 
         if not email:
             raise HTTPException(status_code=404, detail="Email not found")
 
-        # Mark email as read when viewing
-        if not email.is_read:
+        # Mark email as read when viewing (skip for deleted emails)
+        if not email.is_read and not email.is_deleted:
             email_repo.mark_as_read(email_id, current_user.id, read=True)
 
         # Convert Email model to dict
@@ -176,6 +180,7 @@ async def get_email(
             "is_starred": email.is_starred,
             "is_processed": email.is_processed,
             "processed_at": email.processed_at.isoformat() if email.processed_at else None,
+            "vector_db_id": email.vector_db_id,
             "summary": email.summary,
             "importance_score": email.importance_score,
             "importance_level": email.importance_level.value if email.importance_level else None,

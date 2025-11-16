@@ -4,6 +4,8 @@ from loguru import logger
 from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 
+from app.models.email import EmailStatus
+from app.db.repositories.email_repo import EmailRepository
 from app.langgraph.graph import create_email_processing_graph
 from app.langgraph.state import EmailProcessingState, initialize_state
 
@@ -43,6 +45,14 @@ class AgentService:
         try:
             logger.info(f"Starting email processing: email_id={email_id}, user_id={user_id}")
             
+            # 처리 시작 시 status를 'processing'으로 업데이트
+            email_repo = EmailRepository(db)
+            email = email_repo.get_email_by_id(email_id, user_id)
+            if email:
+                email_repo.update_email(email, status=EmailStatus.PROCESSING)
+                db.commit()
+                logger.info(f"Updated email {email_id} status to PROCESSING")
+            
             # State 초기화 (기본 구조만 생성, 이메일 데이터는 load_email_node에서 로드)
             initial_state = initialize_state(email_id, user_id)
             
@@ -68,6 +78,18 @@ class AgentService:
             
         except Exception as e:
             logger.error(f"Error processing email {email_id}: {e}", exc_info=True)
+            
+            # 에러 발생 시 status를 'failed'로 업데이트
+            try:
+                email_repo = EmailRepository(db)
+                email = email_repo.get_email_by_id(email_id, user_id)
+                if email:
+                    email_repo.update_email(email, status=EmailStatus.FAILED)
+                    db.commit()
+                    logger.info(f"Updated email {email_id} status to FAILED due to error")
+            except Exception as update_error:
+                logger.error(f"Failed to update email status to FAILED: {update_error}")
+            
             return {
                 "success": False,
                 "email_id": email_id,
