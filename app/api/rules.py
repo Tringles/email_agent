@@ -1,21 +1,23 @@
 """User Rule API endpoints."""
 
+from loguru import logger
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db.session import get_db
-from app.db.repositories.user_rule_repo import UserRuleRepository
 from app.db.repositories.email_repo import EmailRepository
+from app.db.repositories.user_rule_repo import UserRuleRepository
 from app.schemas.user_rule_schema import (
     UserRuleCreate,
     UserRuleUpdate,
     UserRuleResponse,
     CreateRuleFromEmailRequest
 )
-from app.models.user_rule import RuleType, RuleAction
 from app.models.user import User
 from app.api.auth import get_current_user
+from app.core.id_encryption import decrypt_email_id
+from app.models.user_rule import RuleType, RuleAction
 
 router = APIRouter(prefix="/api/v1/rules", tags=["rules"])
 
@@ -58,6 +60,32 @@ async def create_rule(
                 detail="Reference email not found or access denied"
             )
     
+    # Metadata-based rule validation
+    elif rule_data.rule_type == RuleType.METADATA_BASED:
+        has_filter = (
+            rule_data.sender_filter or
+            rule_data.sender_pattern or
+            rule_data.subject_keywords or
+            rule_data.subject_pattern or
+            rule_data.category_filter or
+            rule_data.importance_level_filter or
+            rule_data.folder_filter or
+            rule_data.has_attachments_filter is not None
+        )
+        if not has_filter:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="At least one metadata filter is required for metadata-based rules"
+            )
+    
+    # Classification-based rule validation
+    elif rule_data.rule_type == RuleType.CLASSIFICATION_BASED:
+        if not rule_data.classification_category and not rule_data.classification_tags:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="classification_category or classification_tags is required for classification-based rules"
+            )
+    
     # Create rule
     rule = rule_repo.create_rule(
         user_id=current_user.id,
@@ -84,9 +112,9 @@ async def create_rule(
     return UserRuleResponse(**rule.to_dict())
 
 
-@router.post("/from-email/{email_id}", response_model=UserRuleResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/from-email/{encrypted_email_id}", response_model=UserRuleResponse, status_code=status.HTTP_201_CREATED)
 async def create_rule_from_email(
-    email_id: int,
+    encrypted_email_id: str,
     rule_data: CreateRuleFromEmailRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -94,9 +122,16 @@ async def create_rule_from_email(
     """
     Create a similarity-based rule from an email.
     
-    "이런 메일 삭제" 같은 요청을 처리합니다.
+    "유사 메일 차단" 같은 요청을 처리합니다.
     지정한 이메일과 유사한 이메일들에 대해 규칙을 적용합니다.
     """
+    # Decrypt email ID
+    try:
+        email_id = decrypt_email_id(encrypted_email_id)
+    except ValueError as e:
+        logger.warning(f"Invalid encrypted email_id: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid email ID")
+    
     # 이메일 존재 및 소유권 확인
     email_repo = EmailRepository(db)
     email = email_repo.get_email_by_id(email_id, current_user.id)
