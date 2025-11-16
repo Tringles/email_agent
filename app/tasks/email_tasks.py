@@ -509,10 +509,11 @@ def process_pending_emails_task(limit: int = 50):
         db = SessionLocal()
         email_repo = EmailRepository(db)
         
-        # PENDING 상태이고 아직 처리되지 않은 이메일 조회
+        # PENDING 상태이고 아직 처리되지 않은 이메일 조회 (삭제된 이메일 제외)
         pending_emails = db.query(Email).filter(
             Email.status == EmailStatus.PENDING,
-            Email.is_processed == False
+            Email.is_processed == False,
+            Email.is_deleted == False
         ).limit(limit).all()
         
         if not pending_emails:

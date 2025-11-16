@@ -33,7 +33,8 @@ class EmailRepository:
         """
         query = self.db.query(Email).filter(
             Email.is_processed == False,
-            Email.status == EmailStatus.PENDING
+            Email.status == EmailStatus.PENDING,
+            Email.is_deleted == False
         )
 
         if account_id:
