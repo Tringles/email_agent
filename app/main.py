@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api import agent, auth, email, health
+from app.api import agent, auth, email, health, rules
 
 
 @asynccontextmanager
@@ -45,6 +45,7 @@ app.include_router(auth.router)
 app.include_router(email.router)
 app.include_router(agent.router)
 app.include_router(health.router)
+app.include_router(rules.router)
 
 
 @app.get("/")
