@@ -62,9 +62,9 @@ async def process_email(
                 "status": "processing"
             }
         else:
-            # 동기 처리 (즉시 실행)
+            # 동기 처리 (즉시 실행) - async 엔드포인트이므로 await 사용
             agent_service = AgentService()
-            result = agent_service.process_email_sync(decrypted_email_id, current_user.id, db)
+            result = await agent_service.process_email(decrypted_email_id, current_user.id, db)
             
             return {
                 "success": result.get("success", False),
@@ -138,13 +138,13 @@ async def process_emails_batch(
                 "status": "processing"
             }
         else:
-            # 동기 처리 (순차 실행)
+            # 동기 처리 (순차 실행) - async 엔드포인트이므로 await 사용
             agent_service = AgentService()
             results = []
             
             for encrypted_id, decrypted_id in decrypted_ids:
                 try:
-                    result = agent_service.process_email_sync(decrypted_id, current_user.id, db)
+                    result = await agent_service.process_email(decrypted_id, current_user.id, db)
                     results.append({
                         "email_id": encrypted_id,
                         "success": result.get("success", False),

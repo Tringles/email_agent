@@ -6,6 +6,7 @@ from datetime import datetime
 from app.langgraph.state import EmailProcessingState
 from app.models.email import EmailStatus, ImportanceLevel
 from app.db.repositories.email_repo import EmailRepository
+from app.db.session import SessionLocal
 
 
 def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
@@ -18,10 +19,12 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
     Returns:
         업데이트된 EmailProcessingState
     """
+    db = None
     try:
         logger.info(f"Saving results for email {state['email_id']}")
         
-        db = state["db_session"]
+        # 새로운 DB 세션 생성 (state에 포함하지 않으므로)
+        db = SessionLocal()
         email_repo = EmailRepository(db)
         
         # 이메일 조회
@@ -53,6 +56,9 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
         # 자동 액션 적용
         _apply_auto_action(email, state, email_repo)
         
+        # 변경사항 커밋
+        db.commit()
+        
         state["completed_at"] = datetime.now()
         state["current_node"] = "save_results"
         state["completed_nodes"].append("save_results")
@@ -63,16 +69,23 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
         logger.error(f"Error saving results for email {state['email_id']}: {e}", exc_info=True)
         
         # 이메일 상태를 FAILED로 변경
+        error_db = None
         try:
-            db = state["db_session"]
-            email_repo = EmailRepository(db)
+            if db is None:
+                error_db = SessionLocal()
+            else:
+                error_db = db
+            email_repo = EmailRepository(error_db)
             email = email_repo.get_email_by_id(state["email_id"], state["user_id"])
             if email:
                 email.status = EmailStatus.FAILED
                 email.is_processed = False
-                db.commit()
+                error_db.commit()
         except Exception as save_error:
             logger.error(f"Error marking email as failed: {save_error}")
+        finally:
+            if error_db and error_db != db:
+                error_db.close()
         
         state["errors"].append({
             "node": "save_results",
@@ -85,6 +98,10 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
         
         # 에러를 다시 발생시켜서 그래프가 실패로 처리되도록
         raise
+    finally:
+        # DB 세션 정리 (성공/실패 모두)
+        if db:
+            db.close()
     
     return state
 

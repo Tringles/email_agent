@@ -93,7 +93,10 @@ class AgentService:
         db: Session
     ) -> Dict[str, Any]:
         """
-        이메일을 AI Agent로 처리 (동기 버전)
+        이메일을 AI Agent로 처리 (동기 버전 - Celery task용)
+        
+        주의: 이 메서드는 Celery task에서만 사용해야 합니다.
+        FastAPI async 엔드포인트에서는 process_email()을 직접 await하세요.
         
         Args:
             email_id: 처리할 이메일 ID
@@ -106,19 +109,26 @@ class AgentService:
         import asyncio
         
         try:
-            # 이미 이벤트 루프가 실행 중인 경우
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 새로운 태스크로 실행
-                import nest_asyncio
-                nest_asyncio.apply()
-                return loop.run_until_complete(
-                    self.process_email(email_id, user_id, db)
-                )
-            else:
-                return loop.run_until_complete(
-                    self.process_email(email_id, user_id, db)
-                )
-        except RuntimeError:
-            # 이벤트 루프가 없는 경우 새로 생성
-            return asyncio.run(self.process_email(email_id, user_id, db))
+            # Celery task는 별도의 프로세스에서 실행되므로 새로운 이벤트 루프 생성 가능
+            # uvloop는 FastAPI에서만 사용되므로, Celery worker에서는 일반 asyncio 사용
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 루프가 있는 경우 (드물지만 가능)
+                    # 새로운 스레드에서 실행
+                    import concurrent.futures
+                    def run_in_new_loop():
+                        return asyncio.run(self.process_email(email_id, user_id, db))
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(run_in_new_loop)
+                        return future.result()
+                else:
+                    return loop.run_until_complete(
+                        self.process_email(email_id, user_id, db)
+                    )
+            except RuntimeError:
+                # 이벤트 루프가 없는 경우 새로 생성
+                return asyncio.run(self.process_email(email_id, user_id, db))
+        except Exception as e:
+            logger.error(f"Error in process_email_sync: {e}", exc_info=True)
+            raise

@@ -48,7 +48,8 @@ class EmailProcessingState(TypedDict):
     
     # === 컨텍스트 데이터 ===
     user_rules: Optional[List[Dict[str, Any]]]  # 사용자 정의 규칙
-    db_session: Any  # SQLAlchemy 세션 (노드에서 DB 업데이트용)
+    # Note: db_session은 state에 포함하지 않음 (직렬화 불가)
+    # 각 노드에서 필요한 경우 새로운 세션을 생성하거나 외부에서 전달받음
     
     # === 메타데이터 ===
     started_at: Optional[datetime]  # 처리 시작 시간
@@ -123,7 +124,7 @@ def initialize_state(
         completed_nodes=[],
         errors=[],
         user_rules=None,  # 추후 구현
-        db_session=db,
+        # db_session은 state에 포함하지 않음 (직렬화 불가)
         started_at=datetime.now(),
         completed_at=None,
     )

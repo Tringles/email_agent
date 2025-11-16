@@ -67,16 +67,28 @@ def classify_node(state: EmailProcessingState) -> EmailProcessingState:
         low_priority_data = _extract_metadata_by_priority(email_data, "low")
         
         # LLM으로 중요도 평가 및 분류
-        result = _classify_email(
-            summary=summary,
-            high_priority=high_priority_data,
-            medium_priority=medium_priority_data,
-            low_priority=low_priority_data
-        )
-        
-        state["importance_score"] = result.get("importance_score", 0.5)
-        state["importance_level"] = result.get("importance_level", "medium")
-        state["classification"] = result.get("classification", {})
+        try:
+            result = _classify_email(
+                summary=summary,
+                high_priority=high_priority_data,
+                medium_priority=medium_priority_data,
+                low_priority=low_priority_data
+            )
+            
+            state["importance_score"] = result.get("importance_score", 0.5)
+            state["importance_level"] = result.get("importance_level", "medium")
+            state["classification"] = result.get("classification", {})
+        except Exception as classify_error:
+            logger.error(f"Error in _classify_email: {classify_error}", exc_info=True)
+            # 기본값 설정
+            state["importance_score"] = 0.5
+            state["importance_level"] = "medium"
+            state["classification"] = {"category": "unknown"}
+            state["errors"].append({
+                "node": "classify",
+                "error": f"Classification error: {str(classify_error)}",
+                "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
+            })
         
         state["current_node"] = "classify"
         state["completed_nodes"].append("classify")
@@ -185,7 +197,23 @@ def _classify_email(
     
     # JSON 파싱
     try:
-        result = json.loads(response.content)
+        # 응답 내용 가져오기
+        content = response.content.strip()
+        
+        # JSON 코드 블록 제거 (```json ... ``` 형식)
+        if content.startswith("```"):
+            # 첫 번째 ``` 이후부터 마지막 ``` 이전까지 추출
+            lines = content.split("\n")
+            if lines[0].startswith("```"):
+                # 첫 번째 줄 제거
+                lines = lines[1:]
+            # 마지막 ``` 제거
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+        
+        # JSON 파싱
+        result = json.loads(content)
         
         # 검증 및 정규화
         importance_score = float(result.get("importance_score", 0.5))
@@ -204,6 +232,7 @@ def _classify_email(
         }
     except (json.JSONDecodeError, ValueError, KeyError) as e:
         logger.error(f"Error parsing classification result: {e}")
+        logger.error(f"Response content: {response.content[:500] if hasattr(response, 'content') else 'N/A'}")
         # 기본값 반환
         return {
             "importance_score": 0.5,

@@ -51,6 +51,12 @@ class LLMService:
             "temperature": kwargs.get("temperature", self.temperature),
         }
         
+        # OpenAI API 키 설정 (LangChain은 api_key 파라미터 사용)
+        if settings.OPENAI_API_KEY:
+            llm_params["api_key"] = settings.OPENAI_API_KEY
+        elif "api_key" in kwargs:
+            llm_params["api_key"] = kwargs["api_key"]
+        
         if self.max_tokens:
             llm_params["max_tokens"] = self.max_tokens
         elif "max_tokens" in kwargs:
@@ -63,8 +69,10 @@ class LLMService:
             # response_format이 직접 전달된 경우 model_kwargs로 변환
             llm_params["model_kwargs"] = {"response_format": kwargs["response_format"]}
         
-        # 나머지 파라미터는 제외 (temperature, max_tokens, model_kwargs, response_format)
-        excluded_keys = {"temperature", "max_tokens", "model_kwargs", "response_format"}
+        # 나머지 파라미터는 제외 (temperature, max_tokens, model_kwargs, response_format, operation_name, api_key)
+        # operation_name은 로깅용이므로 LLM에 전달하지 않음
+        # api_key는 이미 위에서 처리했으므로 제외
+        excluded_keys = {"temperature", "max_tokens", "model_kwargs", "response_format", "operation_name", "api_key"}
         for k, v in kwargs.items():
             if k not in excluded_keys:
                 llm_params[k] = v
