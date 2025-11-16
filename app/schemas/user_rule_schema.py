@@ -88,11 +88,21 @@ class UserRuleCreate(BaseModel):
     @validator("reference_email_id")
     def validate_similarity_rule(cls, v, values):
         """Validate similarity-based rule fields."""
-        if values.get("rule_type") == RuleType.SIMILARITY_BASED:
+        # In Pydantic v2, values is a dict-like object but may not have all fields yet
+        # Check rule_type from values if available
+        rule_type = values.get("rule_type") if hasattr(values, 'get') else None
+        if rule_type == RuleType.SIMILARITY_BASED:
             if v is None:
                 raise ValueError("reference_email_id is required for similarity-based rules")
-            if values.get("similarity_threshold") is None:
-                raise ValueError("similarity_threshold is required for similarity-based rules")
+            # similarity_threshold validation is handled separately
+        return v
+    
+    @validator("similarity_threshold")
+    def validate_similarity_threshold(cls, v, values):
+        """Validate similarity_threshold for similarity-based rules."""
+        rule_type = values.get("rule_type") if hasattr(values, 'get') else None
+        if rule_type == RuleType.SIMILARITY_BASED and v is None:
+            raise ValueError("similarity_threshold is required for similarity-based rules")
         return v
 
 
