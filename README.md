@@ -21,6 +21,7 @@ project-root/
 │   │   ├── auth.py
 │   │   ├── email.py
 │   │   ├── agent.py
+│   │   ├── rules.py
 │   │   └── health.py
 │   ├── core/
 │   │   ├── config.py
@@ -32,33 +33,39 @@ project-root/
 │   │   ├── user.py
 │   │   ├── email_account.py
 │   │   ├── email.py
-│   │   └── agent.py
+│   │   └── user_rule.py
 │   ├── schemas/
 │   │   ├── email_schema.py
-│   │   └── agent_schema.py
+│   │   ├── agent_schema.py
+│   │   └── user_rule_schema.py
 │   ├── services/
 │   │   ├── auth_service.py
 │   │   ├── email_account_service.py
 │   │   ├── email_service.py
 │   │   ├── agent_service.py
+│   │   ├── llm_service.py
 │   │   └── summarizer_service.py
 │   ├── db/
 │   │   ├── session.py
 │   │   └── repositories/
 │   │       ├── email_repo.py
 │   │       ├── email_account_repo.py
-│   │       └── user_repo.py
+│   │       ├── user_repo.py
+│   │       └── user_rule_repo.py
 │   ├── langgraph/
 │   │   ├── graph.py
 │   │   ├── state.py
 │   │   ├── nodes/
+│   │   │   ├── load_email.py
+│   │   │   ├── preprocess_html.py
 │   │   │   ├── summarize.py
 │   │   │   ├── classify.py
 │   │   │   ├── vector_search.py
-│   │   │   └── rule_engine.py
-│   │   └── tools/
-│   │       ├── mail_fetcher.py
-│   │       └── vector_db_tool.py
+│   │   │   ├── rule_engine.py
+│   │   │   └── save_results.py
+│   │   └── utils/
+│   │       ├── error_handler.py
+│   │       └── state_validator.py
 │   ├── mcp/
 │   │   ├── server.py
 │   │   └── tools/
@@ -197,15 +204,19 @@ flowchart TB
 - MIME → S3/MinIO 저장 ✅ 구현 완료
 - 첨부파일 다운로드 ✅ 구현 완료
 
-### 🧠 AI Agent (LangGraph 기반)
+### 🧠 AI Agent (LangGraph 기반) ✅ 구현 완료
 
-- **요약 Summarization Node** 🚧 구현 예정
-- **중요도 평가 Node** 🚧 구현 예정
-- **유사도 기반 Vector Search** (과거 메일 참고) 🚧 구현 예정
-- **Rule Engine** (자동 삭제/이동/태깅) 🚧 구현 예정
-- **상태 기반 재시도** (State Persistence) 🚧 구현 예정
+- **Entry Node (load_email)**: 이메일 데이터 로드 및 권한 검증 ✅
+- **HTML 전처리 Node (preprocess_html)**: HTML 정제, 인용문 제거, 개행 압축 ✅
+- **요약 Summarization Node**: LLM 기반 이메일 요약 생성 ✅
+- **중요도 평가 및 분류 Node (classify)**: 중요도 점수, 레벨, 카테고리, 태그 분류 ✅
+- **Vector Search Node**: 임베딩 생성, Qdrant 저장, 유사 이메일 검색 ✅
+- **Rule Engine Node**: 사용자 정의 규칙 및 기본 규칙 평가, 자동 액션 결정 ✅
+- **Exit Node (save_results)**: 처리 결과 DB 저장, 자동 액션 적용, 최종 검증 ✅
+- **에러 처리 및 재시도**: 공통 에러 처리, 재시도 메커니즘 ✅
+- **상태 검증**: 노드별 상태 검증 유틸리티 ✅
 
-**현재 상태**: 이메일은 `PENDING` 상태로 저장되며, AI Agent 처리는 구현 예정입니다.
+**처리 파이프라인**: `load_email` → `preprocess_html` → `summarize` → `classify` → `vector_search` → `rule_engine` → `save_results`
 
 ### ⚙️ FastMCP Tools
 
@@ -227,8 +238,8 @@ flowchart TB
 - `/api/v1/auth/email-accounts`: 연결된 계정 목록 조회 ✅ 구현 완료
 
 **이메일 API:** ✅ 구현 완료
-- `GET /api/v1/email`: 이메일 목록 조회 (페이지네이션, 필터링)
-- `GET /api/v1/email/{encrypted_id}`: 이메일 상세 조회 (자동 읽음 처리)
+- `GET /api/v1/email`: 이메일 목록 조회 (페이지네이션, 필터링, 삭제된 메일 포함 옵션)
+- `GET /api/v1/email/{encrypted_id}`: 이메일 상세 조회 (자동 읽음 처리, 삭제된 메일 포함 옵션)
 - `PATCH /api/v1/email/{encrypted_id}/read`: 읽음 처리
 - `PATCH /api/v1/email/{encrypted_id}/important`: 중요 표시
 - `PATCH /api/v1/email/{encrypted_id}/archive`: 아카이브
@@ -237,8 +248,22 @@ flowchart TB
 - `GET /api/v1/email/{encrypted_id}/summary`: 요약 조회
 - `GET /api/v1/email/{encrypted_id}/attachments/{attachment_index}`: 첨부파일 다운로드
 
-**Agent API:** 🚧 구현 예정
-- `/api/v1/agent/run`: LangGraph 파이프라인 실행
+**Agent API:** ✅ 구현 완료
+- `POST /api/v1/agent/process`: 단일 이메일 AI 처리 (동기/비동기)
+- `POST /api/v1/agent/process/batch`: 여러 이메일 일괄 처리 (동기/비동기)
+- `POST /api/v1/agent/run`: LangGraph 파이프라인 실행 (하위 호환용)
+- `GET /api/v1/agent/stats`: AI 처리 통계 조회 (처리됨/처리 중/대기 중)
+- `GET /api/v1/agent/processing`: 처리 중인 이메일 목록
+- `GET /api/v1/agent/pending`: 대기 중인 이메일 목록
+
+**스마트 필터 규칙 API:** ✅ 구현 완료
+- `POST /api/v1/rules/from-email/{email_id}`: 이메일로부터 유사도 기반 규칙 생성
+- `POST /api/v1/rules`: 규칙 생성 (유사도/메타데이터/분류 기반)
+- `GET /api/v1/rules`: 사용자 규칙 목록 조회
+- `GET /api/v1/rules/{rule_id}`: 규칙 상세 조회
+- `PUT /api/v1/rules/{rule_id}`: 규칙 수정
+- `DELETE /api/v1/rules/{rule_id}`: 규칙 삭제
+- `POST /api/v1/rules/{rule_id}/toggle`: 규칙 활성화/비활성화
 
 **Health Check:** ✅ 구현 완료
 - `/api/v1/health`: 헬스 체크
@@ -258,17 +283,19 @@ LangGraph 기반 이메일 AI 파이프라인
 
 ```
 langgraph/
-├── graph.py        # 메인 그래프 정의
-├── state.py        # 흐름 state 구조
+├── graph.py              # 메인 그래프 정의
+├── state.py              # 흐름 state 구조
 ├── nodes/
-│   ├── summarize.py
-│   ├── classify.py
-│   ├── vector_search.py
-│   └── rule_engine.py
-└── tools/
-    ├── mail_fetcher.py
-    ├── summarizer_tool.py
-    └── classify_tool.py
+│   ├── load_email.py     # Entry Node: 이메일 데이터 로드
+│   ├── preprocess_html.py # HTML 전처리
+│   ├── summarize.py      # 요약 생성
+│   ├── classify.py        # 중요도 평가 및 분류
+│   ├── vector_search.py   # 임베딩 생성 및 VectorDB 저장
+│   ├── rule_engine.py     # 규칙 평가 및 자동 액션 결정
+│   └── save_results.py    # Exit Node: 결과 저장
+└── utils/
+    ├── error_handler.py   # 공통 에러 처리
+    └── state_validator.py # 상태 검증 유틸리티
 ```
 
 ### `app/mcp/`
@@ -298,7 +325,8 @@ FastAPI 엔드포인트
 api/
 ├── auth.py          # OAuth 인증 엔드포인트
 ├── email.py         # 이메일 조회/수집 API
-├── agent.py         # AI Agent 실행 API
+├── agent.py         # AI Agent 실행 API 및 통계
+├── rules.py         # 스마트 필터 규칙 관리 API
 ├── health.py        # 헬스 체크
 └── __init__.py
 ```
@@ -492,20 +520,29 @@ docker-compose -f docker/docker-compose.yaml up --build -d
 - [x] 첨부파일 다운로드 기능
 - [x] 이메일 삭제 기능 (실제 provider에서 삭제, raw.mime 보존)
 - [x] 이메일 조회 시 자동 읽음 처리
-- [x] 삭제된 이메일 필터링 (is_deleted)
+- [x] 삭제된 이메일 필터링 및 조회 (is_deleted)
 - [x] DB connection pool 분리 (FastAPI: QueuePool, Celery: NullPool)
 - [x] Celery Redis transport 명시적 설정
 - [x] Docker Compose 설정 (모든 서비스 컨테이너화)
+- [x] LangGraph 기반 AI Agent 파이프라인 구현
+- [x] 이메일 요약 (Summarization Node) - LLM 기반
+- [x] 중요도 평가 및 분류 (Classification Node) - 중요도 점수, 레벨, 카테고리, 태그
+- [x] Vector Search 및 임베딩 저장 (Qdrant) - 유사 이메일 검색
+- [x] Rule Engine (자동 액션) - 사용자 정의 규칙 및 기본 규칙 평가
+- [x] 스마트 필터 규칙 시스템 (유사도/메타데이터/분류 기반)
+- [x] AI 처리 상태 통계 및 모니터링
+- [x] HTML 전처리 (인용문 제거, 개행 압축)
+- [x] 에러 처리 및 재시도 메커니즘
+- [x] 상태 검증 유틸리티
+- [x] Celery Beat를 통한 자동 AI 처리 스케줄링
+- [x] 프론트엔드 AI 처리 버튼 (단일/일괄 처리)
+- [x] 프론트엔드 스마트 필터 규칙 관리 UI
 
 ## 🚧 구현 중 / 예정
 
-- [ ] LangGraph AI Agent 파이프라인
-- [ ] 이메일 요약 (Summarization Node)
-- [ ] 중요도 분류 (Classification Node)
-- [ ] Vector Search 및 임베딩 저장
-- [ ] Rule Engine (자동 액션)
 - [ ] MCP Server 구현
 - [ ] Naver OAuth 로그인 (현재는 IMAP만 지원)
+- [ ] 폴더 이동 기능 (Rule Engine의 move 액션)
 
 ## 🧩 Roadmap
 
