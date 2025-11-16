@@ -12,6 +12,7 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from app.core.config import settings
 from app.langgraph.state import EmailProcessingState
+from app.langgraph.utils.error_handler import handle_node_error
 
 # Qdrant 컬렉션 이름
 COLLECTION_NAME = "emails"
@@ -116,20 +117,19 @@ def vector_search_node(state: EmailProcessingState) -> EmailProcessingState:
         )
 
     except Exception as e:
-        logger.error(
-            f"Error in vector search for email {state['email_id']}: {e}", exc_info=True)
-        # VectorDB 실패해도 다음 노드로 진행 (선택적 기능)
-        state["vector_db_id"] = None
-        state["embedding_model"] = None
-        state["similar_emails"] = None
-        state["vector_metadata"] = None
-        state["errors"].append({
-            "node": "vector_search",
-            "error": str(e),
-            "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
-        })
-        state["current_node"] = "vector_search"
-        state["completed_nodes"].append("vector_search")
+        # 공통 에러 처리 (VectorDB 실패해도 다음 노드로 진행)
+        handle_node_error(
+            state=state,
+            node_name="vector_search",
+            error=e,
+            default_values={
+                "vector_db_id": None,
+                "embedding_model": None,
+                "similar_emails": None,
+                "vector_metadata": None
+            },
+            continue_on_error=True
+        )
 
     return state
 

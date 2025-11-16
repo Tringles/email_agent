@@ -7,6 +7,8 @@ from loguru import logger
 from typing import Optional
 
 from app.langgraph.state import EmailProcessingState
+from app.langgraph.utils.error_handler import handle_node_error
+from app.langgraph.utils.state_validator import validate_state_for_node
 from app.langgraph.utils.email_text_processing import remove_quoted_text
 
 
@@ -22,6 +24,14 @@ def preprocess_html_node(state: EmailProcessingState) -> EmailProcessingState:
     """
     try:
         logger.info(f"Preprocessing HTML for email {state['email_id']}")
+        
+        # 상태 검증
+        validation = validate_state_for_node(state, "preprocess_html")
+        if not validation["valid"]:
+            logger.warning(f"State validation failed for preprocess_html node: {validation['errors']}")
+            # 필수 필드가 없으면 에러 발생
+            if validation["errors"]:
+                raise ValueError(f"State validation failed: {', '.join(validation['errors'])}")
         
         body_html = state["email_data"].get("body_html")
         body_text = state["email_data"].get("body_text", "")
@@ -48,16 +58,15 @@ def preprocess_html_node(state: EmailProcessingState) -> EmailProcessingState:
         logger.info(f"HTML preprocessing completed for email {state['email_id']}")
         
     except Exception as e:
-        logger.error(f"Error preprocessing HTML for email {state['email_id']}: {e}")
-        # 에러 발생 시 원본 body_text 사용
-        state["processed_body_html"] = state["email_data"].get("body_text", "")
-        state["errors"].append({
-            "node": "preprocess_html",
-            "error": str(e),
-            "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
-        })
-        state["current_node"] = "preprocess_html"
-        state["completed_nodes"].append("preprocess_html")
+        # 공통 에러 처리 (에러 발생 시 원본 body_text 사용)
+        fallback_text = state["email_data"].get("body_text", "") if state.get("email_data") else ""
+        handle_node_error(
+            state=state,
+            node_name="preprocess_html",
+            error=e,
+            default_values={"processed_body_html": fallback_text},
+            continue_on_error=True
+        )
     
     return state
 
