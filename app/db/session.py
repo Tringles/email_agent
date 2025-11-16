@@ -27,7 +27,7 @@ is_celery_worker = (
 engine_kwargs = {
     "pool_pre_ping": True,  # Verify connections before using (reconnect if needed)
     "pool_recycle": 3600,  # Recycle connections after 1 hour
-    "echo": settings.DEBUG,  # Echo SQL queries in dev mode
+    "echo": False,  # Disable SQL query logging
     "connect_args": {
         "connect_timeout": 10,  # Connection timeout in seconds
         "read_timeout": 10,

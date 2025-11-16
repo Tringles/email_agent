@@ -143,7 +143,7 @@ def _classify_email(
     low_priority: dict
 ) -> dict:
     """
-    LLM을 사용하여 이메일 중요도 평가 및 분류
+    LLM을 사용하여 이메일 중요도 평가 및 분류 (LangChain 1.0 메시지 시스템 사용)
     
     Args:
         summary: 이메일 요약
@@ -158,47 +158,45 @@ def _classify_email(
             "classification": dict (카테고리, 태그 등)
         }
     """
-    # LLM 서비스 가져오기
-    llm_service = get_llm_service(temperature=0.2)  # 일관성을 위해 낮은 temperature
+    # LLM 서비스 가져오기 (JSON 응답을 위해 충분한 토큰 할당)
+    llm_service = get_llm_service(temperature=0.2, max_tokens=5000)
     
-    # 프롬프트 템플릿 생성
-    human_template = """이메일 요약:
-{summary}
+    # Human 메시지 내용 준비
+    human_content = f"""이메일 요약:
+{summary or "요약 없음"}
 
 [High Priority 메타데이터]
-{high_priority}
+{_format_metadata(high_priority)}
 
 [Medium Priority 메타데이터]
-{medium_priority}
+{_format_metadata(medium_priority)}
 
 [Low Priority 메타데이터]
-{low_priority}
+{_format_metadata(low_priority)}
 
 위 정보를 바탕으로 중요도를 평가하고 분류해주세요. JSON 형식으로 응답해주세요."""
     
-    prompt_template = llm_service.create_prompt_template(
-        system_prompt_name="classify_system",
-        human_template=human_template
+    # LangChain 1.0 메시지 시스템 사용 (JSON 형식 강제)
+    response = llm_service.invoke_with_messages(
+        system_prompt=llm_service.load_system_prompt("classify_system"),
+        human_content=human_content,
+        model_kwargs={"response_format": {"type": "json_object"}},
+        operation_name="Classify"
     )
     
-    # LLM 실행 (JSON 형식 강제)
-    # LangChain 1.0: response_format은 model_kwargs로 전달
-    llm = llm_service.get_llm(model_kwargs={"response_format": {"type": "json_object"}})
-    chain = prompt_template | llm
-    response = chain.invoke({
-        "summary": summary or "요약 없음",
-        "high_priority": _format_metadata(high_priority),
-        "medium_priority": _format_metadata(medium_priority),
-        "low_priority": _format_metadata(low_priority)
-    })
+    # Output 로깅
+    logger.debug(f"[Classify] LLM Output:\n{response}")
     
-    # 토큰 사용량 로깅
-    _log_token_usage(response, "Classify")
+    # 토큰 사용량 로깅은 invoke_with_messages 내부에서 처리됨
     
     # JSON 파싱
     try:
-        # 응답 내용 가져오기
-        content = response.content.strip()
+        # 응답 내용 가져오기 (이미 문자열로 반환됨)
+        content = response.strip()
+        
+        if not content:
+            logger.warning("[Classify] Empty response from LLM")
+            raise ValueError("Empty response from LLM")
         
         # JSON 코드 블록 제거 (```json ... ``` 형식)
         if content.startswith("```"):
@@ -211,6 +209,13 @@ def _classify_email(
             if lines and lines[-1].strip().startswith("```"):
                 lines = lines[:-1]
             content = "\n".join(lines).strip()
+        
+        # JSON 객체 추출 (중괄호로 감싸진 부분만 추출)
+        if "{" in content and "}" in content:
+            start_idx = content.find("{")
+            end_idx = content.rfind("}") + 1
+            if start_idx < end_idx:
+                content = content[start_idx:end_idx]
         
         # JSON 파싱
         result = json.loads(content)
@@ -232,7 +237,7 @@ def _classify_email(
         }
     except (json.JSONDecodeError, ValueError, KeyError) as e:
         logger.error(f"Error parsing classification result: {e}")
-        logger.error(f"Response content: {response.content[:500] if hasattr(response, 'content') else 'N/A'}")
+        logger.error(f"Response content: {response[:500] if isinstance(response, str) else str(response)[:500]}")
         # 기본값 반환
         return {
             "importance_score": 0.5,

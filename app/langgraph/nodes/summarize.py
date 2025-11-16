@@ -75,9 +75,9 @@ def summarize_node(state: EmailProcessingState) -> EmailProcessingState:
     return state
 
 
-def _generate_summary(email_content: str, max_length: int = 500) -> str:
+def _generate_summary(email_content: str, max_length: int = 200) -> str:
     """
-    LLM을 사용하여 이메일 요약 생성
+    LLM을 사용하여 이메일 요약 생성 (LangChain 1.0 메시지 시스템 사용)
     
     Args:
         email_content: 이메일 내용 (제목 + 본문, 이미 토큰 기반으로 잘라냄)
@@ -87,23 +87,20 @@ def _generate_summary(email_content: str, max_length: int = 500) -> str:
         요약 텍스트
     """
     # LLM 서비스 가져오기
-    llm_service = get_llm_service(temperature=0.3, max_tokens=200)
+    llm_service = get_llm_service(temperature=0.3, max_tokens=5000)
     
-    # 프롬프트 템플릿 생성
-    prompt_template = llm_service.create_prompt_template(
-        system_prompt_name="summarize_system",
-        human_template="{email_content}"
-    )
-    
-    # 프롬프트 실행 (email_content는 이미 토큰 기반으로 잘라냄)
+    # LangChain 1.0 메시지 시스템 사용
     summary = llm_service.invoke(
-        prompt_template=prompt_template,
-        input_variables={
-            "email_content": email_content,  # 이미 토큰 기반으로 잘라낸 내용
-            "max_length": max_length
-        },
+        system_prompt_name="summarize_system",
+        human_content=email_content,
+        system_prompt_vars={"max_length": max_length},
         operation_name="Summarize"
     )
+    
+    # 빈 응답 체크
+    if not summary or not summary.strip():
+        logger.warning("Empty summary from LLM, using default")
+        summary = "요약을 생성할 수 없습니다."
     
     # 길이 제한
     if len(summary) > max_length:

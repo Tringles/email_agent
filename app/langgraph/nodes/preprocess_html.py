@@ -30,10 +30,14 @@ def preprocess_html_node(state: EmailProcessingState) -> EmailProcessingState:
             # HTML 전처리
             processed = _preprocess_html(body_html)
             processed = remove_quoted_text(processed)
+            # 중복 개행 압축 (최종 정리)
+            processed = re.sub(r'\n{2,}', '\n', processed)
             state["processed_body_html"] = processed
         elif body_text:
             # HTML이 없으면 body_text 사용
             processed = remove_quoted_text(body_text)
+            # 중복 개행 압축
+            processed = re.sub(r'\n{2,}', '\n', processed)
             state["processed_body_html"] = processed
         else:
             state["processed_body_html"] = ""
@@ -109,13 +113,15 @@ def _preprocess_html(html_content: str) -> str:
     # 9. 불필요한 공백/줄바꿈 정리
     # 연속된 공백을 하나로
     html_content = re.sub(r' +', ' ', html_content)
-    # 연속된 줄바꿈을 최대 2개로
-    html_content = re.sub(r'\n{3,}', '\n\n', html_content)
+    # 연속된 줄바꿈을 하나로 압축 (2개 이상의 개행을 1개로)
+    html_content = re.sub(r'\n{2,}', '\n', html_content)
     # 줄 앞뒤 공백 제거
     lines = [line.strip() for line in html_content.split('\n')]
     html_content = '\n'.join(lines)
     
-    # 10. 최종 정리
+    # 10. 최종 정리 (빈 줄 제거 후 다시 개행 정리)
     html_content = html_content.strip()
+    # 빈 줄 제거 후 다시 중복 개행 압축
+    html_content = re.sub(r'\n{2,}', '\n', html_content)
     
     return html_content

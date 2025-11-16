@@ -1,10 +1,10 @@
 """LLM Service - OpenAI LLM 관리."""
 
-from loguru import logger
 from pathlib import Path
-from typing import Optional, Dict, Any
+from loguru import logger
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+from typing import Optional, Dict, Any, List
+from langchain.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.config import settings
 
@@ -46,9 +46,14 @@ class LLMService:
         Returns:
             ChatOpenAI 인스턴스
         """
+        # temperature 처리: kwargs에 있으면 사용, 없으면 self.temperature, 둘 다 없으면 기본값 0.3
+        temperature = kwargs.get("temperature")
+        if temperature is None:
+            temperature = self.temperature if self.temperature is not None else 0.3
+        
         llm_params = {
             "model": self.model,
-            "temperature": kwargs.get("temperature", self.temperature),
+            "temperature": temperature,
         }
         
         # OpenAI API 키 설정 (LangChain은 api_key 파라미터 사용)
@@ -107,58 +112,167 @@ class LLMService:
             logger.error(f"Error loading prompt file {prompt_file}: {e}")
             return ""
     
-    def create_prompt_template(
+    def invoke_with_messages(
+        self,
+        system_prompt: str,
+        human_content: str,
+        **llm_kwargs
+    ) -> str:
+        """
+        LangChain 1.0 메시지 시스템을 사용하여 LLM 호출
+        
+        Args:
+            system_prompt: 시스템 프롬프트
+            human_content: Human 메시지 내용
+            **llm_kwargs: LLM 추가 파라미터
+            
+        Returns:
+            LLM 응답 텍스트 (AIMessage.content)
+        """
+        operation_name = llm_kwargs.get("operation_name", "LLM invoke")
+        
+        # LangChain 1.0 메시지 객체 생성
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_content)
+        ]
+        
+        # Input 로깅
+        logger.debug(f"[{operation_name}] LLM Input:\nSystem: {system_prompt}\n\nHuman: {human_content}")
+        
+        # LLM 호출
+        try:
+            llm = self.get_llm(**llm_kwargs)
+            model_name = getattr(llm, 'model_name', getattr(llm, 'model', 'unknown'))
+            logger.debug(f"[{operation_name}] LLM model: {model_name}")
+            logger.debug(f"[{operation_name}] LLM params: model={model_name}, temperature={getattr(llm, 'temperature', 'N/A')}, max_tokens={getattr(llm, 'max_tokens', 'N/A')}")
+            response = llm.invoke(messages)
+        except Exception as e:
+            logger.error(f"[{operation_name}] Error invoking LLM: {e}", exc_info=True)
+            raise
+        
+        # Response 객체 상세 디버깅
+        logger.debug(f"[{operation_name}] Response type: {type(response)}")
+        logger.debug(f"[{operation_name}] Response is AIMessage: {isinstance(response, AIMessage)}")
+        logger.debug(f"[{operation_name}] Response dir (first 20): {[attr for attr in dir(response) if not attr.startswith('_')][:20]}")
+        
+        # response.content 확인
+        if hasattr(response, 'content'):
+            raw_content = response.content
+            logger.debug(f"[{operation_name}] response.content type: {type(raw_content)}")
+            logger.debug(f"[{operation_name}] response.content is None: {raw_content is None}")
+            if raw_content is not None:
+                if isinstance(raw_content, str):
+                    logger.debug(f"[{operation_name}] response.content (str) length: {len(raw_content)}")
+                    logger.debug(f"[{operation_name}] response.content (str) value (first 200 chars): {repr(raw_content[:200])}")
+                elif isinstance(raw_content, list):
+                    logger.debug(f"[{operation_name}] response.content (list) length: {len(raw_content)}")
+                    logger.debug(f"[{operation_name}] response.content (list) items types: {[type(item).__name__ for item in raw_content]}")
+                    for i, item in enumerate(raw_content):
+                        logger.debug(f"[{operation_name}] response.content[{i}]: type={type(item).__name__}, value={repr(str(item)[:100])}")
+                else:
+                    logger.debug(f"[{operation_name}] response.content (other) value: {repr(str(raw_content)[:200])}")
+        else:
+            logger.warning(f"[{operation_name}] Response has no 'content' attribute")
+            # 다른 속성 확인
+            for attr in ['text', 'message', 'response', 'output']:
+                if hasattr(response, attr):
+                    logger.debug(f"[{operation_name}] Response has '{attr}' attribute: {type(getattr(response, attr))}")
+                    logger.debug(f"[{operation_name}] Response.{attr} value: {repr(str(getattr(response, attr))[:200])}")
+        
+        # response_metadata 확인
+        if hasattr(response, 'response_metadata'):
+            logger.debug(f"[{operation_name}] response.response_metadata: {response.response_metadata}")
+        
+        # Output 추출
+        output_content = None
+        if hasattr(response, 'content'):
+            output_content = response.content
+            if output_content is None:
+                logger.warning(f"[{operation_name}] response.content is None")
+                output_content = ""
+            elif isinstance(output_content, str):
+                output_content = output_content.strip()
+                if not output_content:
+                    logger.warning(f"[{operation_name}] response.content is empty string after strip")
+            elif isinstance(output_content, list):
+                # 멀티모달 콘텐츠인 경우 텍스트만 추출
+                logger.debug(f"[{operation_name}] Processing list content: {len(output_content)} items")
+                text_parts = []
+                for item in output_content:
+                    if isinstance(item, str):
+                        text_parts.append(item)
+                    elif hasattr(item, 'text'):
+                        text_parts.append(str(item.text))
+                    elif hasattr(item, 'content'):
+                        text_parts.append(str(item.content))
+                    else:
+                        text_parts.append(str(item))
+                output_content = " ".join(text_parts).strip()
+                if not output_content:
+                    logger.warning(f"[{operation_name}] No text extracted from list content")
+            else:
+                logger.warning(f"[{operation_name}] Unexpected content type: {type(output_content)}")
+                output_content = str(output_content).strip()
+        elif hasattr(response, 'text'):
+            logger.debug(f"[{operation_name}] Using response.text instead of content")
+            output_content = str(response.text).strip()
+        else:
+            logger.error(f"[{operation_name}] Cannot extract content from response")
+            logger.error(f"[{operation_name}] Response object: {response}")
+            output_content = ""
+        
+        logger.debug(f"[{operation_name}] Final LLM Output:\n{output_content}")
+        logger.debug(f"[{operation_name}] Final LLM Output length: {len(output_content) if output_content else 0}")
+        
+        # 토큰 사용량 로깅
+        self._log_token_usage(response, operation_name)
+        
+        return output_content
+    
+    def invoke(
         self,
         system_prompt_name: str,
-        human_template: str,
-        system_prompt_override: Optional[str] = None
-    ) -> ChatPromptTemplate:
+        human_content: str,
+        system_prompt_override: Optional[str] = None,
+        system_prompt_vars: Optional[Dict[str, Any]] = None,
+        **llm_kwargs
+    ) -> str:
         """
-        프롬프트 템플릿 생성
+        시스템 프롬프트 파일을 로드하여 LLM 호출 (편의 메서드)
         
         Args:
             system_prompt_name: 시스템 프롬프트 파일명
-            human_template: Human 메시지 템플릿
+            human_content: Human 메시지 내용
             system_prompt_override: 시스템 프롬프트 오버라이드 (파일 대신 직접 제공)
+            system_prompt_vars: 시스템 프롬프트 변수 (예: {"max_length": 500})
+            **llm_kwargs: LLM 추가 파라미터
             
         Returns:
-            ChatPromptTemplate 인스턴스
+            LLM 응답 텍스트
         """
         if system_prompt_override:
             system_prompt = system_prompt_override
         else:
             system_prompt = self.load_system_prompt(system_prompt_name)
         
-        return ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", human_template)
-        ])
-    
-    def invoke(
-        self,
-        prompt_template: ChatPromptTemplate,
-        input_variables: Dict[str, Any],
-        **llm_kwargs
-    ) -> str:
-        """
-        프롬프트 실행 및 응답 반환
+        # 프롬프트 변수 포맷팅
+        # 프롬프트에 {변수명} 형식이 있으면 변수를 전달해야 함
+        if "{max_length}" in system_prompt or (system_prompt_vars and any(f"{{{key}}}" in system_prompt for key in system_prompt_vars)):
+            # 기본값 설정
+            default_vars = {"max_length": 500}
+            # 전달된 변수와 기본값 병합 (전달된 변수가 우선)
+            vars_to_use = {**default_vars, **(system_prompt_vars or {})}
+            try:
+                system_prompt = system_prompt.format(**vars_to_use)
+            except KeyError as e:
+                logger.warning(f"Missing prompt variable: {e}, using original prompt")
         
-        Args:
-            prompt_template: ChatPromptTemplate 인스턴스
-            input_variables: 프롬프트 변수 딕셔너리
-            **llm_kwargs: LLM 추가 파라미터
-            
-        Returns:
-            LLM 응답 텍스트
-        """
-        llm = self.get_llm(**llm_kwargs)
-        chain = prompt_template | llm
-        response = chain.invoke(input_variables)
-        
-        # 토큰 사용량 로깅
-        self._log_token_usage(response, llm_kwargs.get("operation_name", "LLM invoke"))
-        
-        return response.content.strip()
+        return self.invoke_with_messages(
+            system_prompt=system_prompt,
+            human_content=human_content,
+            **llm_kwargs
+        )
     
     def _log_token_usage(self, response, operation_name: str = "LLM invoke"):
         """
