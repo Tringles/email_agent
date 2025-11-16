@@ -6,6 +6,8 @@ from loguru import logger
 from app.core.config import settings
 from app.langgraph.state import EmailProcessingState
 from app.services.llm_service import get_llm_service
+from app.langgraph.utils.error_handler import handle_node_error
+from app.langgraph.utils.state_validator import validate_state_for_node, validate_importance_score, validate_importance_level, validate_classification
 
 
 # 메타데이터 우선순위 설정
@@ -47,6 +49,14 @@ def classify_node(state: EmailProcessingState) -> EmailProcessingState:
     try:
         logger.info(f"Classifying email {state['email_id']}")
         
+        # 상태 검증
+        validation = validate_state_for_node(state, "classify")
+        if not validation["valid"]:
+            logger.warning(f"State validation failed for classify node: {validation['errors']}")
+            # 필수 필드가 없으면 에러 발생
+            if validation["errors"]:
+                raise ValueError(f"State validation failed: {', '.join(validation['errors'])}")
+        
         # OpenAI API 키 확인
         if not settings.OPENAI_API_KEY:
             logger.warning("OPENAI_API_KEY not set, using default classification")
@@ -75,20 +85,47 @@ def classify_node(state: EmailProcessingState) -> EmailProcessingState:
                 low_priority=low_priority_data
             )
             
-            state["importance_score"] = result.get("importance_score", 0.5)
-            state["importance_level"] = result.get("importance_level", "medium")
-            state["classification"] = result.get("classification", {})
+            importance_score = result.get("importance_score", 0.5)
+            importance_level = result.get("importance_level", "medium")
+            classification = result.get("classification", {})
+            
+            # 출력 값 검증
+            score_validation = validate_importance_score(importance_score)
+            level_validation = validate_importance_level(importance_level)
+            class_validation = validate_classification(classification)
+            
+            if not score_validation["valid"]:
+                logger.warning(f"Invalid importance_score: {score_validation['errors']}, using default 0.5")
+                importance_score = 0.5
+            
+            if not level_validation["valid"]:
+                logger.warning(f"Invalid importance_level: {level_validation['errors']}, using default 'medium'")
+                importance_level = "medium"
+            
+            if not class_validation["valid"]:
+                logger.warning(f"Invalid classification: {class_validation['errors']}, using default")
+                classification = {"category": "unknown"}
+            
+            state["importance_score"] = importance_score
+            state["importance_level"] = importance_level
+            state["classification"] = classification
         except Exception as classify_error:
+            # 내부 에러 처리 (기본값 설정)
             logger.error(f"Error in _classify_email: {classify_error}", exc_info=True)
-            # 기본값 설정
             state["importance_score"] = 0.5
             state["importance_level"] = "medium"
             state["classification"] = {"category": "unknown"}
-            state["errors"].append({
-                "node": "classify",
-                "error": f"Classification error: {str(classify_error)}",
-                "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
-            })
+            handle_node_error(
+                state=state,
+                node_name="classify",
+                error=classify_error,
+                default_values={
+                    "importance_score": 0.5,
+                    "importance_level": "medium",
+                    "classification": {"category": "unknown"}
+                },
+                continue_on_error=True
+            )
         
         state["current_node"] = "classify"
         state["completed_nodes"].append("classify")
@@ -99,18 +136,18 @@ def classify_node(state: EmailProcessingState) -> EmailProcessingState:
         )
         
     except Exception as e:
-        logger.error(f"Error classifying email {state['email_id']}: {e}", exc_info=True)
-        # 기본값 설정
-        state["importance_score"] = 0.5
-        state["importance_level"] = "medium"
-        state["classification"] = {"category": "unknown"}
-        state["errors"].append({
-            "node": "classify",
-            "error": str(e),
-            "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
-        })
-        state["current_node"] = "classify"
-        state["completed_nodes"].append("classify")
+        # 공통 에러 처리 (기본값 설정)
+        handle_node_error(
+            state=state,
+            node_name="classify",
+            error=e,
+            default_values={
+                "importance_score": 0.5,
+                "importance_level": "medium",
+                "classification": {"category": "unknown"}
+            },
+            continue_on_error=True
+        )
     
     return state
 

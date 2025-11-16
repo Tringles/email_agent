@@ -43,20 +43,8 @@ class AgentService:
         try:
             logger.info(f"Starting email processing: email_id={email_id}, user_id={user_id}")
             
-            # 사용자 권한 확인 (이메일이 해당 사용자의 것인지 확인)
-            from app.db.repositories.email_repo import EmailRepository
-            email_repo = EmailRepository(db)
-            email = email_repo.get_email_by_id(email_id)
-            
-            if not email:
-                raise ValueError(f"Email {email_id} not found")
-            
-            # 이메일 계정이 해당 사용자의 것인지 확인
-            if email.email_account.user_id != user_id:
-                raise PermissionError(f"Email {email_id} does not belong to user {user_id}")
-            
-            # State 초기화
-            initial_state = initialize_state(email_id, user_id, db)
+            # State 초기화 (기본 구조만 생성, 이메일 데이터는 load_email_node에서 로드)
+            initial_state = initialize_state(email_id, user_id)
             
             # 그래프 실행
             config = {"configurable": {"thread_id": f"email_{email_id}"}}

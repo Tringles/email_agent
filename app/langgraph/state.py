@@ -58,56 +58,25 @@ class EmailProcessingState(TypedDict):
 
 def initialize_state(
     email_id: int,
-    user_id: int,
-    db: Session
+    user_id: int
 ) -> EmailProcessingState:
-    """State를 초기화하고 이메일 데이터를 로드"""
-    from app.db.repositories.email_repo import EmailRepository
+    """
+    State를 초기화 (기본 구조만 생성)
     
-    email_repo = EmailRepository(db)
-    email = email_repo.get_email_by_id(email_id)
+    Note: 이메일 데이터는 load_email_node에서 로드됩니다.
+    이 함수는 Entry 노드 진입 전 기본 state만 생성합니다.
     
-    if not email:
-        raise ValueError(f"Email {email_id} not found")
-    
+    Args:
+        email_id: 처리할 이메일 ID
+        user_id: 사용자 ID
+        
+    Returns:
+        초기화된 EmailProcessingState (email_data는 None)
+    """
     return EmailProcessingState(
         email_id=email_id,
         user_id=user_id,
-        email_data={
-            # 기본 정보
-            "subject": email.subject,
-            "sender": email.sender,
-            "sender_name": email.sender_name,
-            "recipient": email.recipient,
-            "recipient_name": email.recipient_name,
-            # 본문
-            "body_text": email.body_text,
-            "body_html": email.body_html,
-            # 날짜
-            "email_date": email.email_date.isoformat() if email.email_date else None,
-            "received_date": email.received_date.isoformat() if email.received_date else None,
-            # 폴더/라벨
-            "folder": email.folder,
-            "labels": email.labels,
-            # 참조
-            "cc": email.cc,
-            "bcc": email.bcc,
-            "reply_to": email.reply_to,
-            # 첨부파일
-            "attachments": email.attachments,  # 전체 첨부파일 메타데이터 리스트
-            "attachment_count": email.attachment_count,
-            "has_attachments": email.has_attachments,
-            "attachment_names": [
-                att.get("filename", "") for att in (email.attachments or [])
-                if att.get("filename")
-            ],  # 첨부파일 이름 리스트 (중요도 판별 및 VectorDB 저장용)
-            # 기타
-            "preview": email.preview,
-            "headers": email.headers,
-            "provider_metadata": email.provider_metadata,
-            "provider_message_id": email.provider_message_id,
-            "provider_thread_id": email.provider_thread_id,
-        },
+        email_data=None,  # load_email_node에서 로드
         processed_body_html=None,
         summary=None,
         importance_score=None,
@@ -124,7 +93,6 @@ def initialize_state(
         completed_nodes=[],
         errors=[],
         user_rules=None,  # 추후 구현
-        # db_session은 state에 포함하지 않음 (직렬화 불가)
         started_at=datetime.now(),
         completed_at=None,
     )

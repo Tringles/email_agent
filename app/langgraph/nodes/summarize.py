@@ -5,6 +5,8 @@ from loguru import logger
 from app.core.config import settings
 from app.langgraph.state import EmailProcessingState
 from app.services.llm_service import get_llm_service
+from app.langgraph.utils.error_handler import handle_node_error
+from app.langgraph.utils.state_validator import validate_state_for_node
 from app.langgraph.utils.email_text_processing import prepare_email_content_for_llm
 
 
@@ -20,6 +22,14 @@ def summarize_node(state: EmailProcessingState) -> EmailProcessingState:
     """
     try:
         logger.info(f"Summarizing email {state['email_id']}")
+        
+        # 상태 검증
+        validation = validate_state_for_node(state, "summarize")
+        if not validation["valid"]:
+            logger.warning(f"State validation failed for summarize node: {validation['errors']}")
+            # 필수 필드가 없으면 에러 발생
+            if validation["errors"]:
+                raise ValueError(f"State validation failed: {', '.join(validation['errors'])}")
         
         # OpenAI API 키 확인
         if not settings.OPENAI_API_KEY:
@@ -61,16 +71,14 @@ def summarize_node(state: EmailProcessingState) -> EmailProcessingState:
         logger.info(f"Summary generated for email {state['email_id']}")
         
     except Exception as e:
-        logger.error(f"Error summarizing email {state['email_id']}: {e}", exc_info=True)
-        # 요약 실패해도 다음 노드로 진행
-        state["summary"] = None
-        state["errors"].append({
-            "node": "summarize",
-            "error": str(e),
-            "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
-        })
-        state["current_node"] = "summarize"
-        state["completed_nodes"].append("summarize")
+        # 공통 에러 처리 (요약 실패해도 다음 노드로 진행)
+        handle_node_error(
+            state=state,
+            node_name="summarize",
+            error=e,
+            default_values={"summary": None},
+            continue_on_error=True
+        )
     
     return state
 

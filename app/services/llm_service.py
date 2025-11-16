@@ -1,5 +1,6 @@
 """LLM Service - OpenAI LLM 관리."""
 
+import time
 from pathlib import Path
 from loguru import logger
 from langchain_openai import ChatOpenAI
@@ -7,6 +8,7 @@ from typing import Optional, Dict, Any, List
 from langchain.messages import SystemMessage, HumanMessage, AIMessage
 
 from app.core.config import settings
+from app.langgraph.utils.error_handler import is_retryable_error
 
 
 class LLMService:
@@ -140,15 +142,38 @@ class LLMService:
         # Input 로깅
         logger.debug(f"[{operation_name}] LLM Input:\nSystem: {system_prompt}\n\nHuman: {human_content}")
         
-        # LLM 호출
+        # LLM 호출 (재시도 가능한 에러에 대해서만 재시도)
         try:
             llm = self.get_llm(**llm_kwargs)
             model_name = getattr(llm, 'model_name', getattr(llm, 'model', 'unknown'))
             logger.debug(f"[{operation_name}] LLM model: {model_name}")
             logger.debug(f"[{operation_name}] LLM params: model={model_name}, temperature={getattr(llm, 'temperature', 'N/A')}, max_tokens={getattr(llm, 'max_tokens', 'N/A')}")
-            response = llm.invoke(messages)
+            
+            # 재시도 가능한 에러에 대해서만 재시도
+            max_retries = 2
+            retry_delay = 1.0
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    response = llm.invoke(messages)
+                    break  # 성공 시 루프 종료
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries and is_retryable_error(e):
+                        logger.warning(
+                            f"[{operation_name}] Retryable error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                            f"Retrying in {retry_delay:.2f}s..."
+                        )
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # 지수 백오프
+                    else:
+                        # 재시도 불가능하거나 최대 재시도 횟수 초과
+                        logger.error(f"[{operation_name}] Error invoking LLM: {e}", exc_info=True)
+                        raise
+            
         except Exception as e:
-            logger.error(f"[{operation_name}] Error invoking LLM: {e}", exc_info=True)
+            logger.error(f"[{operation_name}] Error invoking LLM after retries: {e}", exc_info=True)
             raise
         
         # Response 객체 상세 디버깅

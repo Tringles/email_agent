@@ -4,6 +4,7 @@ from loguru import logger
 from typing import Dict, Any
 
 from app.langgraph.state import EmailProcessingState
+from app.langgraph.utils.error_handler import handle_node_error
 
 
 def rule_engine_node(state: EmailProcessingState) -> EmailProcessingState:
@@ -35,18 +36,18 @@ def rule_engine_node(state: EmailProcessingState) -> EmailProcessingState:
         )
         
     except Exception as e:
-        logger.error(f"Error in rule engine for email {state['email_id']}: {e}", exc_info=True)
-        # 실패 시 기본값 설정
-        state["rule_applied"] = None
-        state["auto_action"] = "none"
-        state["action_details"] = {}
-        state["errors"].append({
-            "node": "rule_engine",
-            "error": str(e),
-            "timestamp": state["started_at"].isoformat() if state.get("started_at") else None
-        })
-        state["current_node"] = "rule_engine"
-        state["completed_nodes"].append("rule_engine")
+        # 공통 에러 처리 (실패 시 기본값 설정)
+        handle_node_error(
+            state=state,
+            node_name="rule_engine",
+            error=e,
+            default_values={
+                "rule_applied": None,
+                "auto_action": "none",
+                "action_details": {}
+            },
+            continue_on_error=True
+        )
     
     return state
 
