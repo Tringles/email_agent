@@ -235,24 +235,42 @@ def _calculate_similarity(
         current_embedding = embeddings.embed_query(query_text)
         
         # reference_vector_id의 임베딩 가져오기 (Qdrant에서 직접)
+        # Qdrant 클라이언트의 retrieve는 리스트를 직접 반환
         result = qdrant_client.retrieve(
             collection_name=COLLECTION_NAME,
             ids=[reference_vector_id]
         )
         
-        if not result.points or len(result.points) == 0:
+        # result가 리스트인지 확인 (최신 Qdrant 클라이언트는 리스트를 직접 반환)
+        if isinstance(result, list):
+            points = result
+        else:
+            # 구버전: result.points 사용
+            points = getattr(result, 'points', [])
+        
+        if not points or len(points) == 0:
             logger.warning(f"Reference vector {reference_vector_id} not found in Qdrant")
             return None
         
-        reference_point = result.points[0]
-        if not reference_point.vector:
+        reference_point = points[0]
+        
+        # 벡터 데이터 추출 (PointStruct 또는 dict 형태)
+        if hasattr(reference_point, 'vector'):
+            vector = reference_point.vector
+        elif isinstance(reference_point, dict):
+            vector = reference_point.get('vector')
+        else:
+            # 벡터 속성 접근 시도
+            vector = getattr(reference_point, 'vector', None)
+        
+        if not vector:
             logger.warning(f"Reference vector {reference_vector_id} has no vector data")
             return None
         
         # 코사인 거리 계산 (Qdrant는 코사인 거리 사용)
         import numpy as np
         current_vec = np.array(current_embedding, dtype=np.float32)
-        reference_vec = np.array(reference_point.vector, dtype=np.float32)
+        reference_vec = np.array(vector, dtype=np.float32)
         
         # 정규화
         current_norm = np.linalg.norm(current_vec)
