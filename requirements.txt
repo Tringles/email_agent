@@ -26,6 +26,7 @@ alembic
 
 # Vector Database
 qdrant-client
+langchain-qdrant  # Qdrant vector store integration for LangChain 1.0
 
 # Embeddings
 tiktoken
@@ -57,6 +58,7 @@ loguru
 python-dateutil
 pytz
 python-jose[cryptography]  # JWT token handling
+nest-asyncio  # For running async code in sync context
 
 # Testing
 pytest

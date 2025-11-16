@@ -27,7 +27,7 @@ is_celery_worker = (
 engine_kwargs = {
     "pool_pre_ping": True,  # Verify connections before using (reconnect if needed)
     "pool_recycle": 3600,  # Recycle connections after 1 hour
-    "echo": settings.DEBUG,  # Echo SQL queries in dev mode
+    "echo": False,  # Disable SQL query logging
     "connect_args": {
         "connect_timeout": 10,  # Connection timeout in seconds
         "read_timeout": 10,
@@ -89,13 +89,22 @@ def get_db() -> Generator[Session, None, None]:
             )
         raise
     except Exception as e:
+        # DB URL에서 비밀번호 마스킹
+        db_url_safe = "N/A"
+        if '@' in settings.DATABASE_URL:
+            try:
+                # mysql+pymysql://user:password@host:port/db -> host:port/db만 표시
+                db_url_safe = settings.DATABASE_URL.split('@')[1]
+            except Exception:
+                db_url_safe = "***"
+        
         logger.error(
             f"Database session error: {e}\n"
             f"Error type: {type(e).__name__}\n"
             f"Traceback:\n{traceback.format_exc()}\n"
             f"Engine pool class: {engine.pool.__class__.__name__}\n"
             f"Is Celery worker: {getattr(settings, '_USE_NULL_POOL', False)}\n"
-            f"DB URL: {settings.DATABASE_URL.split('@')[1] if '@' in settings.DATABASE_URL else 'N/A'}"
+            f"DB URL: {db_url_safe}"
         )
         raise
     finally:
