@@ -310,10 +310,25 @@ class GmailProvider(EmailProvider):
         return default
 
     def _parse_date(self, date_str: str) -> Optional[datetime]:
-        """Parse email date string."""
+        """
+        Parse email date string.
+        
+        Returns None if parsing fails or date is invalid (before 1970 or after 2100).
+        """
+        if not date_str:
+            return None
+            
         try:
-            return parsedate_to_datetime(date_str)
-        except:
+            parsed_date = parsedate_to_datetime(date_str)
+            
+            # 날짜 유효성 검사: 1970년 이전이거나 2100년 이후면 None 반환
+            if parsed_date.year < 1970 or parsed_date.year > 2100:
+                logger.warning(f"Invalid email date (out of range): {date_str}, year: {parsed_date.year}")
+                return None
+            
+            return parsed_date
+        except Exception as e:
+            logger.warning(f"Failed to parse email date: {date_str}, error: {e}")
             return None
 
     async def download_attachment(
