@@ -159,9 +159,13 @@ def _matches_similarity_rule(
         if not rule.reference_email_id or rule.similarity_threshold is None:
             return False
         
-        # 예시 이메일 조회
+        # 예시 이메일 조회 (soft delete된 이메일도 조회 가능하도록 include_deleted=True)
         email_repo = EmailRepository(db)
-        reference_email = email_repo.get_email_by_id(rule.reference_email_id, state["user_id"])
+        reference_email = email_repo.get_email_by_id(
+            rule.reference_email_id, 
+            state["user_id"],
+            include_deleted=True  # Soft delete된 이메일도 참조 가능
+        )
         if not reference_email or not reference_email.vector_db_id:
             logger.warning(f"Reference email {rule.reference_email_id} not found or not processed")
             return False
@@ -236,9 +240,11 @@ def _calculate_similarity(
         
         # reference_vector_id의 임베딩 가져오기 (Qdrant에서 직접)
         # Qdrant 클라이언트의 retrieve는 리스트를 직접 반환
+        # with_vectors=True를 명시적으로 전달해야 벡터 데이터를 가져올 수 있음
         result = qdrant_client.retrieve(
             collection_name=COLLECTION_NAME,
-            ids=[reference_vector_id]
+            ids=[reference_vector_id],
+            with_vectors=True
         )
         
         # result가 리스트인지 확인 (최신 Qdrant 클라이언트는 리스트를 직접 반환)
@@ -255,16 +261,58 @@ def _calculate_similarity(
         reference_point = points[0]
         
         # 벡터 데이터 추출 (PointStruct 또는 dict 형태)
+        # Qdrant Python 클라이언트는 PointStruct 객체를 반환하며, vector 속성은 리스트 형태
+        vector = None
+        
+        # PointStruct 객체인 경우
         if hasattr(reference_point, 'vector'):
-            vector = reference_point.vector
+            vector_attr = reference_point.vector
+            # 벡터가 딕셔너리인 경우 (named vectors - 여러 벡터가 있는 경우)
+            if isinstance(vector_attr, dict):
+                # 기본 벡터 이름을 사용하거나 첫 번째 벡터 사용
+                vector = vector_attr.get('vector') or vector_attr.get('default') or (list(vector_attr.values())[0] if vector_attr else None)
+            # 벡터가 리스트인 경우 (일반적인 경우)
+            elif isinstance(vector_attr, list):
+                vector = vector_attr
+            else:
+                vector = vector_attr
+        # dict 형태인 경우
         elif isinstance(reference_point, dict):
-            vector = reference_point.get('vector')
+            vector_attr = reference_point.get('vector')
+            if isinstance(vector_attr, dict):
+                vector = vector_attr.get('vector') or vector_attr.get('default') or (list(vector_attr.values())[0] if vector_attr else None)
+            elif isinstance(vector_attr, list):
+                vector = vector_attr
+            else:
+                vector = vector_attr
         else:
             # 벡터 속성 접근 시도
-            vector = getattr(reference_point, 'vector', None)
+            vector_attr = getattr(reference_point, 'vector', None)
+            if isinstance(vector_attr, dict):
+                vector = vector_attr.get('vector') or vector_attr.get('default') or (list(vector_attr.values())[0] if vector_attr else None)
+            elif isinstance(vector_attr, list):
+                vector = vector_attr
+            else:
+                vector = vector_attr
         
         if not vector:
+            # 디버깅을 위해 reference_point의 구조 로깅
+            logger.debug(
+                f"Reference point structure for {reference_vector_id}: "
+                f"type={type(reference_point)}, "
+                f"has_vector={hasattr(reference_point, 'vector') if not isinstance(reference_point, dict) else 'vector' in reference_point}, "
+                f"vector_attr_type={type(getattr(reference_point, 'vector', None)) if hasattr(reference_point, 'vector') else 'N/A'}, "
+                f"attrs={[attr for attr in dir(reference_point) if not attr.startswith('_')][:10]}"
+            )
             logger.warning(f"Reference vector {reference_vector_id} has no vector data")
+            return None
+        
+        # 벡터가 리스트인지 확인
+        if not isinstance(vector, (list, tuple)):
+            logger.warning(
+                f"Reference vector {reference_vector_id} vector is not a list/tuple: "
+                f"type={type(vector)}"
+            )
             return None
         
         # 코사인 거리 계산 (Qdrant는 코사인 거리 사용)
