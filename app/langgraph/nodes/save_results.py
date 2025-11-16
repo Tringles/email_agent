@@ -1,6 +1,7 @@
 """Save Results Node - Exit Node."""
 
 from loguru import logger
+from typing import Dict, Any
 from datetime import datetime
 
 from app.langgraph.state import EmailProcessingState
@@ -13,6 +14,9 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
     """
     Exit Node: 처리 결과를 DB에 저장하고 상태 업데이트
     
+    이 노드는 파이프라인의 종료점으로, 최종 상태를 검증하고
+    처리 결과를 DB에 저장하며 결과 요약을 로깅합니다.
+    
     Args:
         state: EmailProcessingState
         
@@ -22,6 +26,14 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
     db = None
     try:
         logger.info(f"Saving results for email {state['email_id']}")
+        
+        # 최종 상태 검증
+        validation_result = _validate_final_state(state)
+        if not validation_result["valid"]:
+            logger.warning(
+                f"State validation warnings for email {state['email_id']}: "
+                f"{validation_result['warnings']}"
+            )
         
         # 새로운 DB 세션 생성 (state에 포함하지 않으므로)
         db = SessionLocal()
@@ -62,6 +74,9 @@ def save_results_node(state: EmailProcessingState) -> EmailProcessingState:
         state["completed_at"] = datetime.now()
         state["current_node"] = "save_results"
         state["completed_nodes"].append("save_results")
+        
+        # 결과 요약 로깅
+        _log_processing_summary(state, validation_result)
         
         logger.info(f"Results saved successfully for email {state['email_id']}")
         
@@ -125,6 +140,93 @@ def _parse_importance_level(level: str) -> ImportanceLevel:
     except ValueError:
         logger.warning(f"Invalid importance level: {level}, defaulting to medium")
         return ImportanceLevel.MEDIUM
+
+
+def _validate_final_state(state: EmailProcessingState) -> Dict[str, Any]:
+    """
+    최종 상태 검증
+    
+    Args:
+        state: EmailProcessingState
+        
+    Returns:
+        {
+            "valid": bool,
+            "warnings": List[str]
+        }
+    """
+    warnings = []
+    
+    # 필수 필드 검증
+    if not state.get("email_data"):
+        warnings.append("email_data is missing")
+    
+    # 처리 결과 검증
+    if not state.get("summary"):
+        warnings.append("summary is missing")
+    
+    if state.get("importance_level") is None:
+        warnings.append("importance_level is missing")
+    
+    if state.get("classification") is None:
+        warnings.append("classification is missing")
+    
+    # 에러 확인
+    if state.get("errors"):
+        warnings.append(f"Processing had {len(state['errors'])} errors")
+    
+    # 완료된 노드 확인
+    expected_nodes = ["load_email", "preprocess_html", "summarize", "classify", "vector_search", "rule_engine"]
+    completed_nodes = state.get("completed_nodes", [])
+    missing_nodes = [node for node in expected_nodes if node not in completed_nodes]
+    if missing_nodes:
+        warnings.append(f"Missing completed nodes: {missing_nodes}")
+    
+    return {
+        "valid": len(warnings) == 0,
+        "warnings": warnings
+    }
+
+
+def _log_processing_summary(state: EmailProcessingState, validation_result: Dict[str, Any]):
+    """
+    처리 결과 요약 로깅
+    
+    Args:
+        state: EmailProcessingState
+        validation_result: _validate_final_state 결과
+    """
+    email_id = state["email_id"]
+    processing_time = None
+    if state.get("started_at") and state.get("completed_at"):
+        processing_time = (state["completed_at"] - state["started_at"]).total_seconds()
+    
+    expected_nodes_count = 6  # load_email, preprocess_html, summarize, classify, vector_search, rule_engine
+    summary_lines = [
+        f"=== Email Processing Summary (ID: {email_id}) ===",
+        f"Processing time: {processing_time:.2f}s" if processing_time else "Processing time: N/A",
+        f"Completed nodes: {len(state.get('completed_nodes', []))}/{expected_nodes_count}",
+        f"Errors: {len(state.get('errors', []))}",
+        f"Summary: {'Generated' if state.get('summary') else 'Missing'}",
+        f"Importance level: {state.get('importance_level', 'N/A')}",
+        f"Importance score: {state.get('importance_score', 'N/A')}",
+        f"Classification: {state.get('classification', {}).get('category', 'N/A') if state.get('classification') else 'N/A'}",
+        f"Vector DB ID: {state.get('vector_db_id', 'N/A')}",
+        f"Rule applied: {state.get('rule_applied', 'N/A')}",
+        f"Auto action: {state.get('auto_action', 'none')}",
+    ]
+    
+    if validation_result["warnings"]:
+        summary_lines.append(f"Validation warnings: {', '.join(validation_result['warnings'])}")
+    
+    if state.get("errors"):
+        summary_lines.append("Errors:")
+        for error in state["errors"]:
+            summary_lines.append(f"  - [{error.get('node', 'unknown')}]: {error.get('error', 'unknown error')}")
+    
+    summary_lines.append("=" * 50)
+    
+    logger.info("\n".join(summary_lines))
 
 
 def _apply_auto_action(email, state: EmailProcessingState, email_repo: EmailRepository):
