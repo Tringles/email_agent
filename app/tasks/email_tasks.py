@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 from app.db.session import SessionLocal
 from app.core.celery_app import celery_app
 from app.models.email import Email, EmailStatus
+from app.services.agent_service import AgentService
 from app.tasks.providers.factory import get_email_provider
 from app.db.repositories.email_repo import EmailRepository
 from app.services.storage_service import get_storage_service
@@ -430,6 +431,158 @@ def fetch_all_accounts_emails():
         }
     except Exception as e:
         logger.exception(f"Error in fetch_all_accounts_emails: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+    finally:
+        if db:
+            db.close()
+
+
+@shared_task(name="process_email_agent_task", app=celery_app)
+def process_email_agent_task(email_id: int, user_id: int):
+    """
+    Celery task to process a single email with LangGraph AI Agent.
+    
+    Args:
+        email_id: Email ID to process
+        user_id: User ID (owner of the email)
+        
+    Returns:
+        Result dictionary with processing status
+    """
+    db = None
+    try:
+        db = SessionLocal()
+        agent_service = AgentService()
+        
+        # LangGraph 실행 (동기 버전 사용)
+        result = agent_service.process_email_sync(email_id, user_id, db)
+        
+        logger.info(
+            f"Email {email_id} processed: success={result.get('success')}, "
+            f"nodes={result.get('completed_nodes', [])}"
+        )
+        
+        return result
+        
+    except OperationalError as e:
+        error_str = str(e).lower()
+        if 'connection refused' in error_str or 'can\'t connect' in error_str:
+            logger.error(
+                f"Database connection failed for email {email_id}: {e}. "
+                f"Please ensure MySQL is running."
+            )
+        logger.exception(f"Error processing email {email_id} with agent: {e}")
+        return {
+            "success": False,
+            "email_id": email_id,
+            "error": f"Database connection failed: {str(e)}"
+        }
+    except Exception as e:
+        logger.exception(f"Error processing email {email_id} with agent: {e}")
+        return {
+            "success": False,
+            "email_id": email_id,
+            "error": str(e)
+        }
+    finally:
+        if db:
+            db.close()
+
+
+@shared_task(name="process_pending_emails_task", app=celery_app)
+def process_pending_emails_task(limit: int = 50):
+    """
+    Celery task to process pending emails with LangGraph AI Agent.
+    Processes emails with status PENDING that haven't been processed yet.
+    
+    Args:
+        limit: Maximum number of emails to process in one run
+        
+    Returns:
+        Result dictionary with processing status
+    """
+    db = None
+    try:
+        db = SessionLocal()
+        email_repo = EmailRepository(db)
+        
+        # PENDING 상태이고 아직 처리되지 않은 이메일 조회
+        pending_emails = db.query(Email).filter(
+            Email.status == EmailStatus.PENDING,
+            Email.is_processed == False
+        ).limit(limit).all()
+        
+        if not pending_emails:
+            logger.debug("No pending emails to process")
+            return {
+                "status": "success",
+                "processed_count": 0,
+                "emails": []
+            }
+        
+        logger.info(f"Processing {len(pending_emails)} pending emails")
+        
+        agent_service = AgentService()
+        results = []
+        
+        for email in pending_emails:
+            try:
+                user_id = email.email_account.user_id
+                
+                # LangGraph 실행
+                result = agent_service.process_email_sync(email.id, user_id, db)
+                
+                results.append({
+                    "email_id": email.id,
+                    "success": result.get("success", False),
+                    "completed_nodes": result.get("completed_nodes", []),
+                    "errors": result.get("errors", []),
+                })
+                
+                logger.info(
+                    f"Email {email.id} processed: success={result.get('success')}"
+                )
+                
+            except Exception as e:
+                logger.error(f"Error processing email {email.id}: {e}", exc_info=True)
+                results.append({
+                    "email_id": email.id,
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        success_count = sum(1 for r in results if r.get("success", False))
+        
+        logger.info(
+            f"Processed {len(results)} emails: {success_count} successful, "
+            f"{len(results) - success_count} failed"
+        )
+        
+        return {
+            "status": "success",
+            "processed_count": len(results),
+            "success_count": success_count,
+            "failed_count": len(results) - success_count,
+            "emails": results
+        }
+        
+    except OperationalError as e:
+        error_str = str(e).lower()
+        if 'connection refused' in error_str or 'can\'t connect' in error_str:
+            logger.error(
+                f"Database connection failed: {e}. "
+                f"Please ensure MySQL is running."
+            )
+        logger.exception(f"Error in process_pending_emails_task: {e}")
+        return {
+            "status": "error",
+            "error": f"Database connection failed: {str(e)}"
+        }
+    except Exception as e:
+        logger.exception(f"Error in process_pending_emails_task: {e}")
         return {
             "status": "error",
             "error": str(e)

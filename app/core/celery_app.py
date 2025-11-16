@@ -48,5 +48,9 @@ celery_app.conf.beat_schedule = {
         "task": "fetch_all_accounts_emails",
         "schedule": 300.0,  # Every 5 minutes
     },
+    "process-pending-emails": {
+        "task": "process_pending_emails_task",
+        "schedule": 300.0,  # Every 5 minute
+    },
 }
 
